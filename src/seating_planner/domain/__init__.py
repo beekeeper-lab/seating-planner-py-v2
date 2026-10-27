@@ -63,7 +63,7 @@ class Table:
 
 @dataclass
 class Guest:
-    """An invited guest; ``eligible`` is derived, never stored (FR-019)."""
+    """A wedding guest; ``eligible`` is derived, never stored (FR-019)."""
 
     id: str
     name: str
