@@ -1,0 +1,48 @@
+{
+  "runs_root": "factory/runs",
+  "branch_pattern": "bean/BEAN-NNN-<slug>",
+  "bean_dir_pattern": "factory/beans/BEAN-NNN-<slug>",
+  "bean_index_path": "factory/beans/INDEX.md",
+  "repo_config": "factory/repo.yaml",
+  "gates_ref": "factory/gates.lock.yaml",
+  "corpus": {
+    "name": "seating-planner",
+    "bean_set": "v1",
+    "requirements_sha256": "73512dcd5b1e39493ba8a6fcbf6cd464cfe8ab1bc0d1625d73bb94b10fcc18e5"
+  },
+  "test_command": [
+    "pytest",
+    "-q"
+  ],
+  "verify_timeout_s": 900,
+  "worker_timeout_s": 7200,
+  "sandbox_env": {
+    "PYTHONPATH": "/work/src"
+  },
+  "_comment": [
+    "Read by the factory pipeline scripts, which live in the Local_Dark_Factory repo.",
+    "Point them at this file: PIPELINE_CONFIG=<this repo>/factory/pipeline-config.json",
+    "gates_ref means the gate list comes from the pinned manifest, not from here —",
+    "two lists of gates is one list that will eventually disagree with itself.",
+    "sandbox_env says how this project becomes importable inside the gate container.",
+    "A src-layout package is not importable in a bare synced tree: there is no",
+    "install step and §08 gives the gate no network to run one. PYTHONPATH=/work/src",
+    "is the honest minimum. It makes the package importable; it is not the same as",
+    "an editable install, and a bean whose criterion really means *installed* is",
+    "asking for something this line cannot currently give it.",
+    "hidden_tests names tests the worker never sees. They live in the factory repo, which the worker never mounts -- it gets this repo at /work and factory/skills read-only -- and the gate mounts them read-only at /hidden. <bean> is the bean id of the run, because they are written from the acceptance criteria of one bean. Paths are relative to this file, so they assume the factory repo is a sibling of this one; preflight says so at once if it is not. What comes back to the worker is a count and nothing else."
+  ],
+  "hidden_tests": {
+    "dir": "../../Local_Dark_Factory/hidden-tests/seating-planner-py/<bean>",
+    "command": [
+      "python",
+      "-m",
+      "pytest",
+      "-q",
+      "-p",
+      "no:cacheprovider"
+    ],
+    "mount_at": "/hidden",
+    "results_dir": "../../Local_Dark_Factory/hidden-tests/results"
+  }
+}

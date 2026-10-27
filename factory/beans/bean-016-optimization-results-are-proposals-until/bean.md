@@ -1,0 +1,51 @@
+# bean-016 — Optimization results are proposals until accepted
+
+> Generated from `bean.yaml` by `factory/scaffold.sh`. Edit the YAML, not this file.
+
+| Field | Value |
+|---|---|
+| **Pipeline Tier** | full |
+| Status | approved |
+| Suggested risk tier | 2 |
+| Approved by | Gregg Reed (bulk approval, delegated) |
+| Run order | 16 |
+| Depends on | bean-015 |
+| Size budget | 6 tasks · 5 files · 550 diff lines |
+
+## Intent
+
+No recalculation reaches the saved chart without the organizer first seeing every guest whose table would change and accepting it.
+
+## Background
+
+Every mode so far has returned an assignment. This bean makes returning one and committing one different operations: optimize produces a proposal, and a separate accept applies it. The comparison between the saved chart and the proposal is the thing the organizer actually reads, so it must list every changed guest with their old and new table — and be empty, not absent, when nothing would change. Declining a proposal must leave no trace at all in the saved chart.
+Run 1 built the comparison correctly but collapsed two different outcomes into the same shape: a solve that is genuinely infeasible, and a feasible solve that happens to propose no changes, both produced a Proposal with empty assignments and an empty comparison. Nothing distinguished them, and accept() had no status check at all — it wrote proposal.assignments through unconditionally. Measured: a 1-table/capacity-1 event with 2 confirmed guests, a real saved chart already seating both of them, optimize() under the new infeasible solve returns assignments={} same as the nothing-to-change case, and accept() on that proposal overwrites the saved chart with {} — silently destroying it, through a normal-looking audit entry naming the actor who accepted, with nothing in the API that could have warned them. The organizer the bean's whole intent is protecting saw nothing wrong and still lost their chart.
+Ready-made fixture for ac6's own test: one table, capacity 1 ("t1"), two confirmed guests ("g1", "g2"). Save a chart seating both at "t1" (the pre-existing real data). Call optimize() against this event in planning mode — it is infeasible (one seat, two guests) — and accept() the resulting proposal. A correct implementation refuses the accept (raises) without writing, so repo.load_chart("e1") after the raise is still exactly {"g1": "t1", "g2": "t1"}, byte-identical to before. A second case in the same test: an actually-feasible solve that proposes no changes (the saved chart is already optimal) must still accept successfully, same as before this bean's fix — the new check must distinguish "infeasible" from "feasible, nothing changed", never conflate the two directions.
+
+## May write
+
+- `src/seating_planner/solver/**`
+- `src/seating_planner/store/**`
+- `tests/solver/**`
+- `tests/store/**`
+
+## Acceptance criteria
+
+| ID | Criterion | Verified by |
+|---|---|---|
+| ac1 | Optimizing does not modify the saved chart until the proposal is accepted. | `test` `tests/solver/test_proposals.py::test_optimize_does_not_commit` |
+| ac2 | The comparison lists every guest whose table would change, with old and new table. | `test` `tests/solver/test_proposals.py::test_comparison_lists_every_change` |
+| ac3 | A proposal that changes nothing yields an empty comparison rather than no comparison. | `test` `tests/solver/test_proposals.py::test_no_change_yields_empty_comparison` |
+| ac4 | Declining a proposal leaves the saved chart byte-identical. | `test` `tests/solver/test_proposals.py::test_declined_proposal_changes_nothing` |
+| ac5 | Accepting a proposal writes the new chart and an audit entry naming the actor. | `test` `tests/store/test_proposal_accept.py::test_accept_writes_chart_and_audit` |
+| ac6 | A proposal from an infeasible solve is never indistinguishable from a feasible solve that proposes no changes — accepting an infeasible proposal raises instead of writing, and never touches the saved chart. | `test` `tests/store/test_proposal_accept.py::test_accepting_an_infeasible_proposal_refuses_and_writes_nothing` |
+
+## Constraints
+
+- optimize and accept are separate operations
+- a Proposal states whether its underlying solve was feasible, not only what it would change; accept() checks this before writing anything
+
+## Non-goals
+
+- no undo/redo stack
+

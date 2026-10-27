@@ -1,0 +1,147 @@
+schema_version: bean/2.0.0
+id: bean-032
+repo: beekeeper-lab/seating-planner-py
+title: An infeasibility report names every hard-rule and shortage cause, together
+intent: >
+  When a planning or low-disruption solve is infeasible because of more than one
+  independent hard-rule conflict, or a hard-rule conflict together with a seat shortage,
+  the report names a rule set whose removal (and, for a shortage, whose added capacity)
+  makes the event solvable, and names no rule that is not part of some conflict.
+status: approved
+approval:
+  approved_by: "Gregg Reed (owner, directly)"
+  approved_at: "2026-10-08T08:00:00Z"
+  order: 32
+source:
+  kind: manual
+  ref: evidence/reviews/retroactive-20260928.md
+  date: "2026-10-08"
+  excerpt: "bean-028: The one-removal diagnosis has blind spots. With two independent conflicts, no rule is named. A seat shortage plus a rule conflict gives only capacity advice."
+context:
+  read_paths:
+    - src/seating_planner/solver/
+    - src/seating_planner/domain/
+    - tests/solver/
+  background: >
+    bean-028 asked one spec session to design multi-cause diagnosis across hard rules,
+    locks, seat shortage and movement limit, in planning and low-disruption modes, in one
+    pass. Both of its runs (bean-028-20261008T024921Z) hit the worker's wall-clock limit
+    mid-generation, at 2 hours and again at 3 hours, each time partway through a session
+    that had already produced two turns of 21,000-22,000 tokens; the owner chose to split
+    the scope on 2026-10-08 rather than raise the timeout a third time.
+
+    This half is the narrower, more foundational one: a search over which SUBSET of the
+    event's enabled hard rules (and, separately, whether a seat shortage is also present)
+    must be changed to restore feasibility, replacing the one-removal probe that tries
+    rules one at a time and reports nothing when two are jointly necessary.
+
+    Measured on the main branch, planning mode unless stated: two independent
+    contradictory pairs of hard rules (same-table and different-table on g-0/g-1, and
+    again on g-2/g-3) give no rule ids and the generic "the enabled hard rules are jointly
+    unsatisfiable" advice. Five guests at two tables of two, plus one contradictory pair,
+    give capacity advice only; after adding the counted seats it is still unsolvable,
+    because the rule conflict was never named alongside the shortage. A seat shortage
+    alone, and a movement limit too small to allow any chart, are already reported
+    correctly today and are out of scope here.
+
+    Locks and the movement limit stay out of this bean's search space entirely (bean-033's
+    territory, which depends on this one): a lock is still reported however it is today,
+    and a diagnosis here never recommends unlocking anyone or raising the movement limit.
+
+    Run 1 (bean-032-20261012T143638Z, PR #28) was built and reviewed; the pre-merge review
+    found a regression the owner chose to fix before merging rather than ship. The rule
+    search decided whether a shortage alone explained the infeasibility by solving on a
+    model with every table enlarged to hold all eligible guests, and then ran every rule
+    probe on that SAME enlarged model -- so with every table able to seat everyone, removing
+    any rule at all trivially succeeded, and a rule with no real conflict was named anyway.
+    Measured: 5 guests, two 2-seat tables, one harmless same-table rule on two guests never
+    near capacity -- main correctly reports only the shortage; run 1 also named the harmless
+    rule (evidence/reviews/bean-032-20261012T143638Z.md). Rule-conflict detection and
+    shortage detection are two different questions and must be answered on two different
+    models: whether enough seats exist at all (the enlarged model), and which of the real,
+    as-declared table capacities a rule's removal would need (the event's own capacities).
+
+    Run 2 (bean-032-20261012T213344Z, PR #29) fixed run 1's regression but split the extra
+    capacity that cures a shortfall round-robin across tables (or, in an earlier hand-built
+    reference fix, piled it all on one table) before asking whether curing the shortfall
+    alone restores feasibility. Either way, that commits to ONE placement of the extra seats
+    before asking whether a placement exists at all: a same-table group that only fits once
+    a SPECIFIC table gains room was told the shortage did not explain it on its own, and the
+    group's own rule was blamed for a shortage a different placement of the same seats would
+    have cured (evidence/reviews/bean-032-20261012T213344Z.md). Measured: tables of 3 and 1
+    seats, 5 guests, a 3-guest same-table rule and a 2-guest same-table rule, one seat short
+    -- the extra seat belongs at the 1-seat table and nowhere else works, but the round-robin
+    split put it at the 3-seat table instead and named both rules. No single table can ever
+    need more than the WHOLE shortfall to absorb any one real placement of it, so giving
+    every table that much slack -- not a split share, not all of it on one table -- is the
+    least capacity that proves whether a placement exists anywhere, without reintroducing
+    run 1's bug of enlarging every table past what the real shortfall could ever require.
+
+    Run 1 also could not name three or more simultaneous independent hard-rule conflicts
+    (its search tries single rules, then pairs, and stops). That is not a regression -- main
+    cannot either -- and ac1 only ever asked for the two-conflict case. It is accepted as a
+    known boundary of this bean, not a fresh gap to fix here; see the non-goal below.
+
+    Run 3 (bean-032-20261013T002611Z, PR #30) fixed run 2's bug, but giving every table up
+    to the full shortfall as slack -- with nothing bounding the SUM of slack actually used
+    across tables -- let the model accept up to n times the shortfall in total across n
+    tables, not one real placement of it. Two groups that each needed a DIFFERENT table to
+    grow were both judged seatable by capacity alone, because each table separately got its
+    own full allowance (evidence/reviews/bean-032-20261013T002611Z.md). Measured: tables of
+    2, 2 and 1 seats, 6 guests, a 3-guest same-table rule on each of two disjoint groups, a
+    1-seat shortfall -- the probe reports only the shortage and no rule, yet no single real
+    placement of that one extra seat restores feasibility with both groups kept; a rule from
+    one of the two groups must still be named. This is not a regression against main, which
+    has the identical gap in its own shortage-only path (never checked against a real
+    placement either); it is a hole in ac3's coverage that ac6, taken alone, does not close.
+    The fix keeps each table's own slack bounded at the shortfall (so run 1's bug does not
+    return) and adds one more constraint: the EXTRA seats actually used, summed across every
+    table together, are also capped at the shortfall. The two bounds together are what make
+    the probe test one real placement of the shortfall, rather than many placements added up.
+allowed_write_paths:
+  - src/seating_planner/solver/**
+  - tests/solver/**
+acceptance_criteria:
+  - id: ac1
+    text: An event with two independent hard-rule conflicts gets a report that names rules from both, and removing every named rule makes it solvable.
+    verify: { kind: test, test_id: "tests/solver/test_complete_diagnosis.py::test_two_conflicts_are_both_named" }
+  - id: ac2
+    text: An event with a seat shortage and a hard-rule conflict gets a report that counts the shortfall, recommends add_capacity, and names the conflicting rules.
+    verify: { kind: test, test_id: "tests/solver/test_complete_diagnosis.py::test_shortage_and_rule_conflict_are_both_named" }
+  - id: ac3
+    text: In planning and low-disruption modes, every named hard rule is part of some conflict, and removing all named rules (and, if a shortfall is counted, adding that many seats) makes the event solvable in the same mode; no lock recommendation and no movement-limit recommendation is added by this diagnosis.
+    verify: { kind: test, test_id: "tests/solver/test_complete_diagnosis.py::test_named_rules_are_real_and_enough" }
+  - id: ac5
+    text: Whether a rule is named as a conflict is decided against the event's own table capacities, never against a model enlarged to test for a seat shortage. A rule that has no real conflict is not named, whether or not the event also has a shortage.
+    verify: { kind: test, test_id: "tests/solver/test_complete_diagnosis.py::test_a_harmless_rule_is_not_named_alongside_a_shortage" }
+  - id: ac6
+    text: Whether curing a seat shortage alone restores feasibility is checked with every table free to take up to the full shortfall, not a split share of it and not all of it on one table, so a rule whose own group only fits once a specific table gains room is not named just because a different placement of the same extra seats was tried first.
+    verify: { kind: test, test_id: "tests/solver/test_complete_diagnosis.py::test_a_group_rule_is_not_named_when_some_placement_of_the_shortfall_cures_it" }
+  - id: ac4
+    text: Every existing solver test still passes unchanged.
+    verify: { kind: command, run: ["pytest", "-q", "tests/solver"] }
+  - id: ac7
+    text: Whether curing a seat shortage alone restores feasibility is checked against seats that total the shortfall across every table together, never the full shortfall allowed at each table independently, so a diagnosis never claims a shortage-only cure that no real placement of the shortfall could deliver, and removing every named rule plus adding exactly the shortfall still restores feasibility in the same mode.
+    verify: { kind: test, test_id: "tests/solver/test_complete_diagnosis.py::test_the_shortfall_cure_is_checked_against_one_real_placement_of_it" }
+constraints:
+  - '"part of some conflict" means there is a set of the event''s enabled hard rules (and, if present, the seat limit) that cannot all hold, and can once the named ones are removed or raised'
+  - conflict_rule_ids stays a sorted tuple of rule ids; capacity_shortfall keeps its meaning
+  - the solve_event signature is unchanged, and the report stays frozen and serializable through to_dict
+  - rule-conflict probing and seat-shortage detection are independent checks, each over its own model; a capacity used only to decide whether a shortfall exists is never the capacity a rule-removal probe runs against
+  - a probe that asks whether curing the shortage alone restores feasibility bounds each table's own slack at the shortfall AND bounds the sum of slack actually used across every table at the shortfall -- both together, so the probe tests one real placement of the shortfall rather than many placements added up
+  - a diagnosis probe that runs out of time names nothing it has not proved
+  - diagnosis solves run with one search worker whatever the caller asked for, because an infeasible core is only reliable with one; the worker count recorded for the chart solve is unaffected
+  - locks and the movement limit are read but never named or changed by this diagnosis; their own recommendations (today's one-removal unlock advice, and raise_movement_limit) pass through exactly as they do on main
+suggested_risk_tier: 2
+size_budget: { max_tasks: 2, max_files: 4, max_diff_lines: 500 }
+definition_of_done:
+  - all AC verify pass
+  - gates green
+  - spec and impl-detail docs accepted
+non_goals:
+  - no change to the event-day diagnosis (bean-025)
+  - no guarantee that the named set is the smallest one
+  - no new recommendation kinds
+  - no change to how locks or the movement limit are diagnosed (bean-033)
+  - naming three or more simultaneous independent hard-rule conflicts at once is out of scope; ac1 covers exactly two, matching run 1's demonstrated boundary
+dependencies: [bean-010, bean-011, bean-013]
