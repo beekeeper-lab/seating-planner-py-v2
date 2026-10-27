@@ -11,6 +11,9 @@ dependencies = [
     "ortools>=9.15",
 ]
 
+[project.optional-dependencies]
+dev = ["ruff", "mypy", "pytest", "pytest-cov"]
+
 [tool.setuptools.packages.find]
 where = ["src"]
 
