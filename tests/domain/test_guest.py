@@ -34,6 +34,17 @@ def test_rsvp_status_values() -> None:
         RsvpStatus("Attending")
 
 
+def test_guest_coerces_and_validates_a_raw_rsvp_string() -> None:
+    """ac2/ac3 apply to Guest construction, not just RsvpStatus itself: a raw
+    string is normalised to the enum, and an invalid one is rejected the same
+    way an invalid RsvpStatus value is."""
+    g = Guest(id="g1", name="Ada", rsvp_status="Confirmed")
+    assert g.rsvp_status is RsvpStatus.CONFIRMED
+    assert g.eligible
+    with pytest.raises(ValueError):
+        Guest(id="g2", name="Bea", rsvp_status="Attending")
+
+
 def test_eligibility_rule() -> None:
     """Eligible when Confirmed, or Pending with a reserved seat, not otherwise."""
     assert make_guest(RsvpStatus.CONFIRMED).eligible

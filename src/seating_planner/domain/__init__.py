@@ -71,6 +71,9 @@ class Guest:
     household: str | None = None
     seat_reserved: bool = False
 
+    def __post_init__(self) -> None:
+        self.rsvp_status = RsvpStatus(self.rsvp_status)
+
     @property
     def eligible(self) -> bool:
         """Confirmed, or Pending with an explicitly reserved seat."""
