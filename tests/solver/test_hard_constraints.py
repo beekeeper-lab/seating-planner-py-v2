@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import pytest
+
 from seating_planner.domain import Event, Guest, RsvpStatus, Table
 from seating_planner.rules import Hardness, Rule, RuleKind
-from seating_planner.solver import SolverConfig, solve_hard
+from seating_planner.solver import SolverConfig, SolverTimeout, solve_hard
 
 CONFIG = SolverConfig(time_limit_s=5.0, seed=7)
 
@@ -140,3 +142,31 @@ def test_infeasible_returns_no_assignment() -> None:
     result = solve_hard(event, CONFIG)
     assert result.status == "infeasible"
     assert result.assignments == {}
+
+
+def test_an_unsettled_solve_raises_rather_than_reporting_infeasible() -> None:
+    """ac5 again, the other direction: a time limit that runs out before
+    CP-SAT proves feasible OR infeasible is an unsettled solve, not a proof
+    that no assignment exists. The same event that solves cleanly with a
+    normal time budget must raise SolverTimeout, never return "infeasible",
+    when the budget is too small to let the solver finish deciding."""
+    event = Event(
+        id="e1",
+        name="Wedding",
+        guests=[guest(f"g{i}") for i in range(1, 61)],
+        tables=[table(f"t{i}", 3) for i in range(1, 21)],
+        rules=[
+            rule(
+                "r-apart",
+                RuleKind.DIFFERENT_TABLE,
+                Hardness.HARD,
+                tuple(f"g{i}" for i in range(1, 21)),
+            ),
+        ],
+    )
+    settled = solve_hard(event, SolverConfig(time_limit_s=5.0, seed=7))
+    assert settled.status == "feasible"
+    assert len(settled.assignments) == 60
+
+    with pytest.raises(SolverTimeout):
+        solve_hard(event, SolverConfig(time_limit_s=0.0001, seed=7))

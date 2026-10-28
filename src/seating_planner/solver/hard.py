@@ -4,8 +4,12 @@ Each eligible guest is assigned to exactly one table: one boolean variable
 per (guest, table) pair, a per-guest sum of exactly one, per-table capacity
 bounds, and — for each enabled hard same/different-table rule — pairwise
 agreement or separation constraints. The result is either a complete chart
-or nothing; a solver status that is not a proven answer is reported
-infeasible with an empty assignment, never a partial chart (FR-050/FR-051).
+or a proven refutation, never a partial chart (FR-050/FR-051): "infeasible"
+means CP-SAT proved no assignment exists. A status that is neither a proven
+answer nor a proven refutation (UNKNOWN: the time limit ran out before either
+was settled) is not an answer about the problem at all, so it is never
+reported as "infeasible" — that would tell a satisfiable problem's caller it
+is impossible. It raises SolverTimeout instead.
 """
 
 from __future__ import annotations
@@ -30,9 +34,18 @@ class SolverConfig:
     seed: int = 0
 
 
+class SolverTimeout(RuntimeError):
+    """The time limit ran out before CP-SAT proved feasible or infeasible.
+
+    Never silently reported as "infeasible": that status means a proof was
+    found that no assignment exists, and an exhausted time limit proves
+    nothing either way.
+    """
+
+
 @dataclass(frozen=True)
 class SolveResult:
-    """Either a complete chart or nothing — never a partial one."""
+    """Either a complete chart or a proven refutation — never a partial one."""
 
     status: str  # "feasible" | "infeasible"
     assignments: dict[str, str] = field(default_factory=dict)
@@ -84,7 +97,12 @@ def _add_different_table(
 
 
 def solve_hard(event: Event, config: SolverConfig | None = None) -> SolveResult:
-    """Assign every eligible guest to exactly one table, or report infeasible."""
+    """Assign every eligible guest to exactly one table, or report infeasible.
+
+    Raises SolverTimeout when the solver reports a status that is neither a
+    settled answer (OPTIMAL/FEASIBLE) nor a settled refutation (INFEASIBLE) —
+    the time limit ran out before CP-SAT proved either way.
+    """
     cfg = config or SolverConfig()
     eligible = [guest.id for guest in event.guests if guest.eligible]
     if not eligible:
@@ -131,8 +149,13 @@ def solve_hard(event: Event, config: SolverConfig | None = None) -> SolveResult:
     # runs this solve twice with the same seed and demands identical charts.
     solver.parameters.num_workers = 1
     status = solver.solve(model)
-    if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+    if status == cp_model.INFEASIBLE:
         return SolveResult(status="infeasible", assignments={})
+    if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+        raise SolverTimeout(
+            f"no table-level assignment settled within {cfg.time_limit_s}s: "
+            f"solver reported {status!r}"
+        )
     assignments = {
         guest: table_id
         for guest, per_table in seat.items()
