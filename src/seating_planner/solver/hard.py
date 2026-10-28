@@ -29,7 +29,7 @@ from ortools.sat.python import cp_model
 from seating_planner.domain import Event
 from seating_planner.rules import Hardness, Rule, RuleKind
 
-from .result import SolveResult, participants_of
+from .result import SolveResult, participants_of, summarize
 
 #: Default bound on the solver's wall time, in seconds.
 DEFAULT_TIME_LIMIT_S: float = 10.0
@@ -139,9 +139,9 @@ def solve_hard(event: Event, config: SolverConfig | None = None) -> SolveResult:
     cfg = config or SolverConfig()
     eligible = [guest.id for guest in event.guests if guest.eligible]
     if not eligible:
-        return SolveResult(status="feasible", assignments={})
+        return summarize("feasible", {}, event)
     if not event.tables:
-        return SolveResult(status="infeasible", assignments={})
+        return summarize("infeasible", {}, event)
 
     model = cp_model.CpModel()
     seat: dict[str, dict[str, Any]] = {
@@ -211,7 +211,7 @@ def solve_hard(event: Event, config: SolverConfig | None = None) -> SolveResult:
     solver.parameters.num_workers = 1
     status = solver.solve(model)
     if status == cp_model.INFEASIBLE:
-        return SolveResult(status="infeasible", assignments={})
+        return summarize("infeasible", {}, event)
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
         raise SolverTimeout(
             f"no table-level assignment settled within {cfg.time_limit_s}s: "
@@ -223,4 +223,4 @@ def solve_hard(event: Event, config: SolverConfig | None = None) -> SolveResult:
         for table_id, var in per_table.items()
         if solver.boolean_value(var)
     }
-    return SolveResult(status="feasible", assignments=assignments)
+    return summarize("feasible", assignments, event)
