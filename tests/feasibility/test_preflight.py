@@ -73,6 +73,39 @@ def test_contradictory_hard_rules() -> None:
     finding: Finding = findings[0]
     assert finding.kind == "contradictory_hard_rules"
     assert finding.rule_ids == ("r-together", "r-apart")
+
+
+def test_contradictory_hard_rules_through_a_group() -> None:
+    """ac1 also holds when one side of the contradiction names a group
+    rather than explicit guest ids: a hard same-table rule scoped to a
+    two-member group is the same contradiction as naming those two guests
+    directly, and must be caught the same way."""
+    event = Event(
+        id="e1",
+        name="Wedding",
+        guests=[guest("g1"), guest("g2")],
+        tables=[table("t1", 4), table("t2", 4)],
+        groups=[Group(id="grpA", name="Group A", member_ids=["g1", "g2"])],
+        rules=[
+            Rule(
+                id="r-together",
+                kind=RuleKind.SAME_TABLE,
+                hardness=Hardness.HARD,
+                group_id="grpA",
+            ),
+            Rule(
+                id="r-apart",
+                kind=RuleKind.DIFFERENT_TABLE,
+                hardness=Hardness.HARD,
+                guests=("g1", "g2"),
+            ),
+        ],
+    )
+    findings = run_preflight(event)
+    assert len(findings) == 1
+    finding: Finding = findings[0]
+    assert finding.kind == "contradictory_hard_rules"
+    assert finding.rule_ids == ("r-together", "r-apart")
     assert "r-together" in finding.message
     assert "r-apart" in finding.message
 

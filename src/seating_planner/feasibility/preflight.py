@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass
 
-from seating_planner.domain import Event
+from seating_planner.domain import Event, Group
 from seating_planner.rules import Hardness, Rule, RuleKind
 
 #: Zone names that exist without being declared. The domain has no zone
@@ -33,15 +33,33 @@ def run_preflight(event: Event, known_zones: Iterable[str] = ()) -> list[Finding
     rules = [rule for rule in event.rules if isinstance(rule, Rule) and rule.enabled]
     zones = frozenset(known_zones) | KNOWN_ZONE_NAMES
     return [
-        *_contradictions(rules),
+        *_contradictions(event, rules),
         *_oversized_groups(event, rules),
         *_total_capacity(event),
         *_missing_targets(event, rules, zones),
     ]
 
 
-def _contradictions(rules: list[Rule]) -> list[Finding]:
+def _effective_guests(rule: Rule, groups: dict[str, Group]) -> frozenset[str]:
+    """A rule's guest ids, with a group reference expanded to its members.
+
+    A rule binds to explicit guest ids or to one group, never both (bean-003).
+    Resolving the group here means a group-scoped hard rule is visible to
+    ``_contradictions`` on the same footing as an explicit-guests one, instead
+    of being invisible to it because it names no guest id directly.
+    """
+    if rule.guests:
+        return frozenset(rule.guests)
+    if rule.group_id is not None:
+        group = groups.get(rule.group_id)
+        if group is not None:
+            return frozenset(group.member_ids)
+    return frozenset()
+
+
+def _contradictions(event: Event, rules: list[Rule]) -> list[Finding]:
     """One finding per hard same/different-table rule pair sharing a pair."""
+    groups = {group.id: group for group in event.groups}
     findings: list[Finding] = []
     for pos, same in enumerate(rules):
         if not _is_hard(same, RuleKind.SAME_TABLE):
@@ -49,7 +67,9 @@ def _contradictions(rules: list[Rule]) -> list[Finding]:
         for diff in rules[pos + 1 :]:
             if not _is_hard(diff, RuleKind.DIFFERENT_TABLE):
                 continue
-            pair = _shared_pair(same, diff)
+            pair = _shared_pair(
+                _effective_guests(same, groups), _effective_guests(diff, groups)
+            )
             if pair is None:
                 continue
             first, second = pair
@@ -67,13 +87,14 @@ def _contradictions(rules: list[Rule]) -> list[Finding]:
     return findings
 
 
-def _shared_pair(rule_a: Rule, rule_b: Rule) -> tuple[str, str] | None:
-    """The shared pair from the smaller guest list, sorted, else ``None``."""
-    small, large = sorted((rule_a, rule_b), key=lambda rule: len(rule.guests))
-    pair = set(small.guests)
-    if len(pair) != 2 or not pair <= set(large.guests):
+def _shared_pair(
+    guests_a: frozenset[str], guests_b: frozenset[str]
+) -> tuple[str, str] | None:
+    """The shared pair from the smaller guest set, sorted, else ``None``."""
+    small, large = sorted((guests_a, guests_b), key=len)
+    if len(small) != 2 or not small <= large:
         return None
-    first, second = sorted(pair)
+    first, second = sorted(small)
     return (first, second)
 
 
