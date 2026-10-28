@@ -21,13 +21,15 @@ is impossible. It raises SolverTimeout instead.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from ortools.sat.python import cp_model
 
-from seating_planner.domain import Event, Group
+from seating_planner.domain import Event
 from seating_planner.rules import Hardness, Rule, RuleKind
+
+from .result import SolveResult, participants_of, summarize
 
 #: Default bound on the solver's wall time, in seconds.
 DEFAULT_TIME_LIMIT_S: float = 10.0
@@ -48,36 +50,6 @@ class SolverTimeout(RuntimeError):
     found that no assignment exists, and an exhausted time limit proves
     nothing either way.
     """
-
-
-@dataclass(frozen=True)
-class SolveResult:
-    """Either a complete chart or a proven refutation — never a partial one."""
-
-    status: str  # "feasible" | "infeasible"
-    assignments: dict[str, str] = field(default_factory=dict)
-
-
-def _participants(
-    rule: Rule, groups: dict[str, Group], eligible_ids: frozenset[str]
-) -> list[str]:
-    """The rule's binders reduced to unique, eligible guest ids in order.
-
-    A rule names either its guests or one group (never both); an absent
-    group binds nobody. Ineligible or unknown ids drop out, so a rule about
-    a guest who never sits adds no constraint.
-    """
-    raw: list[str] | tuple[str, ...] = rule.guests
-    if rule.group_id is not None:
-        group = groups.get(rule.group_id)
-        raw = group.member_ids if group is not None else []
-    seen: set[str] = set()
-    participants: list[str] = []
-    for guest_id in raw:
-        if guest_id in eligible_ids and guest_id not in seen:
-            seen.add(guest_id)
-            participants.append(guest_id)
-    return participants
 
 
 def _add_same_table(
@@ -167,9 +139,9 @@ def solve_hard(event: Event, config: SolverConfig | None = None) -> SolveResult:
     cfg = config or SolverConfig()
     eligible = [guest.id for guest in event.guests if guest.eligible]
     if not eligible:
-        return SolveResult(status="feasible", assignments={})
+        return summarize("feasible", {}, event)
     if not event.tables:
-        return SolveResult(status="infeasible", assignments={})
+        return summarize("infeasible", {}, event)
 
     model = cp_model.CpModel()
     seat: dict[str, dict[str, Any]] = {
@@ -195,7 +167,7 @@ def solve_hard(event: Event, config: SolverConfig | None = None) -> SolveResult:
             or rule.kind not in (RuleKind.SAME_TABLE, RuleKind.DIFFERENT_TABLE)
         ):
             continue
-        participants = _participants(rule, groups, eligible_ids)
+        participants = participants_of(rule, groups, eligible_ids)
         if len(participants) < 2:
             continue
         if rule.kind is RuleKind.SAME_TABLE:
@@ -215,7 +187,7 @@ def solve_hard(event: Event, config: SolverConfig | None = None) -> SolveResult:
             or rule.kind not in (RuleKind.SAME_TABLE, RuleKind.DIFFERENT_TABLE)
         ):
             continue
-        participants = _participants(rule, groups, eligible_ids)
+        participants = participants_of(rule, groups, eligible_ids)
         if len(participants) < 2 or rule.weight is None:
             continue
         if rule.kind is RuleKind.SAME_TABLE:
@@ -239,7 +211,7 @@ def solve_hard(event: Event, config: SolverConfig | None = None) -> SolveResult:
     solver.parameters.num_workers = 1
     status = solver.solve(model)
     if status == cp_model.INFEASIBLE:
-        return SolveResult(status="infeasible", assignments={})
+        return summarize("infeasible", {}, event)
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
         raise SolverTimeout(
             f"no table-level assignment settled within {cfg.time_limit_s}s: "
@@ -251,4 +223,4 @@ def solve_hard(event: Event, config: SolverConfig | None = None) -> SolveResult:
         for table_id, var in per_table.items()
         if solver.boolean_value(var)
     }
-    return SolveResult(status="feasible", assignments=assignments)
+    return summarize("feasible", assignments, event)
