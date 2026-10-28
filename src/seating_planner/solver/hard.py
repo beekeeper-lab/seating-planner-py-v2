@@ -41,6 +41,11 @@ class SolverConfig:
 
     time_limit_s: float = DEFAULT_TIME_LIMIT_S
     seed: int = 0
+    # Parallel CP-SAT search is not deterministic — which worker finds the
+    # optimum first decides among equally good answers — so the default
+    # keeps today's pinned single-worker behaviour; a larger value is an
+    # explicit, recorded trade against wall-clock time, not a constant.
+    num_workers: int = 1
 
 
 class SolverTimeout(RuntimeError):
@@ -139,9 +144,9 @@ def solve_hard(event: Event, config: SolverConfig | None = None) -> SolveResult:
     cfg = config or SolverConfig()
     eligible = [guest.id for guest in event.guests if guest.eligible]
     if not eligible:
-        return summarize("feasible", {}, event)
+        return summarize("feasible", {}, event, cfg)
     if not event.tables:
-        return summarize("infeasible", {}, event)
+        return summarize("infeasible", {}, event, cfg)
 
     model = cp_model.CpModel()
     seat: dict[str, dict[str, Any]] = {
@@ -208,10 +213,12 @@ def solve_hard(event: Event, config: SolverConfig | None = None) -> SolveResult:
     solver.parameters.random_seed = cfg.seed
     # CP-SAT is reproducible per seed only single-worker; inv-reproducible
     # runs this solve twice with the same seed and demands identical charts.
-    solver.parameters.num_workers = 1
+    # The pinned default comes from the configuration, and the same
+    # configuration is stamped onto the result so the run can be replayed.
+    solver.parameters.num_workers = cfg.num_workers
     status = solver.solve(model)
     if status == cp_model.INFEASIBLE:
-        return summarize("infeasible", {}, event)
+        return summarize("infeasible", {}, event, cfg)
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
         raise SolverTimeout(
             f"no table-level assignment settled within {cfg.time_limit_s}s: "
@@ -223,4 +230,4 @@ def solve_hard(event: Event, config: SolverConfig | None = None) -> SolveResult:
         for table_id, var in per_table.items()
         if solver.boolean_value(var)
     }
-    return summarize("feasible", assignments, event)
+    return summarize("feasible", assignments, event, cfg)

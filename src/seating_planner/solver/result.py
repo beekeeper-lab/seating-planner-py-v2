@@ -16,10 +16,14 @@ from __future__ import annotations
 import dataclasses
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from seating_planner.domain import Event, Group
 from seating_planner.rules import Hardness, Rule, RuleKind
+
+if TYPE_CHECKING:
+    # Avoids the import cycle: hard.py imports this module at runtime.
+    from .hard import SolverConfig
 
 # Three states; what a chart cannot decide is `unevaluable`, never `satisfied`.
 SATISFIED = "satisfied"
@@ -59,6 +63,7 @@ class SolveResult:
     """
 
     status: str  # "feasible" | "infeasible"
+    solver_config: SolverConfig  # the configuration that actually made this result
     assignments: dict[str, str] = dataclasses.field(default_factory=dict)
     assigned_count: int = 0
     unassigned_count: int = 0
@@ -140,9 +145,18 @@ def assess_rules(
     return tuple(assessments)
 
 
-def summarize(status: str, assignments: Mapping[str, str], event: Event) -> SolveResult:
+def summarize(
+    status: str,
+    assignments: Mapping[str, str],
+    event: Event,
+    config: SolverConfig,
+) -> SolveResult:
     """A chart's assignments plus its whole report, every field computed
     from the chart itself, so there is no second source to drift from.
+
+    The configuration is stamped on too, so a replay of this result —
+    feasible or a proven refutation — rebuilds the solver exactly as it
+    ran when the result was made.
     """
     rule_states = assess_rules(event, assignments)
     eligible = [guest.id for guest in event.guests if guest.eligible]
@@ -156,6 +170,7 @@ def summarize(status: str, assignments: Mapping[str, str], event: Event) -> Solv
             soft_score += assessment.weight or 0
     return SolveResult(
         status=status,
+        solver_config=config,
         assignments=dict(assignments),
         assigned_count=len(assignments),
         unassigned_count=unassigned,
