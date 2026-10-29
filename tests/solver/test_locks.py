@@ -81,7 +81,7 @@ def test_locked_guest_does_not_move() -> None:
     )
     event.lock_guest("g1", "t1")
 
-    result = solve_hard(event, CONFIG)
+    result = solve_hard(event, CONFIG, mode="planning")
 
     assert result.status == "feasible", (
         f"one locked guest, four seats, no hard rule: a chart exists, "
@@ -137,7 +137,7 @@ def test_table_level_lock_holds() -> None:
             ],
         )
 
-    unlocked = solve_hard(build_event("e-ac2-unlocked"), CONFIG)
+    unlocked = solve_hard(build_event("e-ac2-unlocked"), CONFIG, mode="planning")
     assert unlocked.status == "feasible", (
         f"the locked-trio event has a chart, got status {unlocked.status!r}"
     )
@@ -158,7 +158,7 @@ def test_table_level_lock_holds() -> None:
     for guest_id in ("g1", "g2", "g3"):
         locked_event.lock_guest(guest_id, "t1")
 
-    locked = solve_hard(locked_event, CONFIG)
+    locked = solve_hard(locked_event, CONFIG, mode="planning")
     assert locked.status == "feasible", (
         f"locking the trio at t1 still leaves every pair a table, "
         f"got status {locked.status!r}"
@@ -196,7 +196,7 @@ def test_unlock_allows_move() -> None:
 
     locked_event = build_event("e-ac4-locked")
     locked_event.lock_guest("g1", "t1")
-    locked = solve_hard(locked_event, CONFIG)
+    locked = solve_hard(locked_event, CONFIG, mode="planning")
     assert locked.status == "feasible", (
         f"the locked ac1 fixtures have a chart, got status {locked.status!r}"
     )
@@ -205,7 +205,7 @@ def test_unlock_allows_move() -> None:
     )
 
     locked_event.unlock_guest("g1")
-    unlocked = solve_hard(locked_event, CONFIG)
+    unlocked = solve_hard(locked_event, CONFIG, mode="planning")
     assert unlocked.status == "feasible", (
         f"releasing the lock leaves the event seatable, got status {unlocked.status!r}"
     )
@@ -234,7 +234,7 @@ def test_lock_versus_hard_rule_conflict() -> None:
     )
     event.lock_guest("g1", "t1")
 
-    result = solve_hard(event, CONFIG)
+    result = solve_hard(event, CONFIG, mode="planning")
 
     assert result.status == "infeasible", (
         f"the hard same-table rule and g1's one-seat lock cannot both "

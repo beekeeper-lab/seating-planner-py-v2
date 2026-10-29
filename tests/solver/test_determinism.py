@@ -60,8 +60,8 @@ def test_repeat_run_is_identical() -> None:
     """ac1: two solves of identically built events under one config give
     byte-identical charts — the comparison is on sorted-key JSON, so key
     order or object identity cannot mask a real difference."""
-    first = solve_hard(scenario(), CONFIG)
-    second = solve_hard(scenario(), CONFIG)
+    first = solve_hard(scenario(), CONFIG, mode="planning")
+    second = solve_hard(scenario(), CONFIG, mode="planning")
     assert first.status == "feasible" == second.status
     for result in (first, second):
         at = result.assignments
@@ -77,7 +77,7 @@ def test_result_records_configuration() -> None:
     """ac2: the result carries the seed, time limit and worker count
     actually used — the pinned single-worker default included — and the
     infeasible early return records it too, not only the happy path."""
-    result = solve_hard(scenario(), CONFIG)
+    result = solve_hard(scenario(), CONFIG, mode="planning")
     assert result.status == "feasible"
     saved = stored_config(result)
     assert saved.get("seed") == 7, saved
@@ -93,7 +93,7 @@ def test_result_records_configuration() -> None:
             rule("r-hard-apart", RuleKind.DIFFERENT_TABLE, Hardness.HARD, ("g1", "g2")),
         ],
     )
-    dead_result = solve_hard(dead, CONFIG)
+    dead_result = solve_hard(dead, CONFIG, mode="planning")
     assert dead_result.status == "infeasible"
     dead_saved = stored_config(dead_result)
     assert dead_saved.get("seed") == 7, dead_saved
@@ -106,7 +106,7 @@ def test_stored_config_reproduces_result() -> None:
     recorded reproduces the stored assignment, so a receipt is enough to
     replay its own chart."""
     event = scenario()
-    result = solve_hard(event, CONFIG)
+    result = solve_hard(event, CONFIG, mode="planning")
     assert result.status == "feasible"
     saved = stored_config(result)
     assert saved.get("seed", 0) == 7, saved
@@ -120,6 +120,7 @@ def test_stored_config_reproduces_result() -> None:
             time_limit_s=saved.get("time_limit_s", 5.0),
             seed=saved.get("seed", 0),
         ),
+        mode="planning",
     )
     assert replay.assignments == result.assignments, (
         replay.assignments,
@@ -134,7 +135,7 @@ def test_seed_change_is_visible() -> None:
     divergence is never required, only reportability."""
     for seed in (0, 1):
         config = SolverConfig(time_limit_s=5.0, seed=seed)
-        result = solve_hard(scenario(), config)
+        result = solve_hard(scenario(), config, mode="planning")
         assert result.status == "feasible"
         at = result.assignments
         assert at["g1"] == at["g2"], f"the weight-10 pairing was lost: {at}"
@@ -151,5 +152,6 @@ def test_seed_change_is_visible() -> None:
                 time_limit_s=saved.get("time_limit_s", 5.0),
                 seed=saved.get("seed", 0),
             ),
+            mode="planning",
         )
         assert replay.assignments == at, (replay.assignments, at)

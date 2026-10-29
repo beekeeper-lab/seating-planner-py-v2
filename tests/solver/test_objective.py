@@ -66,7 +66,7 @@ def test_higher_score_preferred() -> None:
             ),
         ],
     )
-    result = solve_hard(event, CONFIG)
+    result = solve_hard(event, CONFIG, mode="planning")
     assignments = result.assignments
     assert result.status == "feasible"
     assert assignments, "no assignments returned"
@@ -99,7 +99,7 @@ def test_soft_never_overrides_hard() -> None:
             ),
         ],
     )
-    result = solve_hard(event, CONFIG)
+    result = solve_hard(event, CONFIG, mode="planning")
     assignments = result.assignments
     assert result.status == "feasible"
     assert assignments["g1"] != assignments["g2"], (
@@ -127,7 +127,7 @@ def test_soft_never_overrides_hard() -> None:
             ),
         ],
     )
-    dead_result = solve_hard(dead, CONFIG)
+    dead_result = solve_hard(dead, CONFIG, mode="planning")
     assert dead_result.status == "infeasible" and dead_result.assignments == {}
 
 
@@ -152,7 +152,7 @@ def test_conflicting_soft_rules_follow_weight() -> None:
             ),
         ],
     )
-    result = solve_hard(event, CONFIG)
+    result = solve_hard(event, CONFIG, mode="planning")
     assignments = result.assignments
     assert result.status == "feasible"
     assert assignments["g1"] == assignments["g2"], (
@@ -175,7 +175,7 @@ def test_conflicting_soft_rules_follow_weight() -> None:
             ),
         ],
     )
-    swapped_result = solve_hard(swapped, CONFIG)
+    swapped_result = solve_hard(swapped, CONFIG, mode="planning")
     swapped_assignments = swapped_result.assignments
     assert swapped_result.status == "feasible"
     assert swapped_assignments["g1"] != swapped_assignments["g2"], (
