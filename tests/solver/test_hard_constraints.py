@@ -59,7 +59,7 @@ def test_all_eligible_guests_assigned() -> None:
             rule("r2", RuleKind.DIFFERENT_TABLE, Hardness.HARD, ("g3", "g4")),
         ],
     )
-    result = solve_hard(event, CONFIG)
+    result = solve_hard(event, CONFIG, mode="planning")
     assert result.status == "feasible"
     assert set(result.assignments) == {f"g{i}" for i in range(1, 6)}
     for guest_id, table_id in result.assignments.items():
@@ -79,7 +79,7 @@ def test_capacity_never_exceeded() -> None:
             rule("r1", RuleKind.SAME_TABLE, Hardness.HARD, ("g1", "g2", "g3")),
         ],
     )
-    result = solve_hard(event, CONFIG)
+    result = solve_hard(event, CONFIG, mode="planning")
     assert result.status == "feasible"
     counts = _counts(result.assignments)
     # 7 guests over 7 seats (3+4, the trio cannot fit both tables): each
@@ -99,7 +99,7 @@ def test_same_and_different_table_rules() -> None:
             rule("r-diff", RuleKind.DIFFERENT_TABLE, Hardness.HARD, ("g3", "g4")),
         ],
     )
-    result = solve_hard(event, CONFIG)
+    result = solve_hard(event, CONFIG, mode="planning")
     assert result.status == "feasible"
     assert result.assignments["g1"] == result.assignments["g2"]
     assert result.assignments["g3"] != result.assignments["g4"]
@@ -120,7 +120,7 @@ def test_ineligible_guests_unassigned() -> None:
         ],
         tables=[table("t1", 6)],
     )
-    result = solve_hard(event, CONFIG)
+    result = solve_hard(event, CONFIG, mode="planning")
     assert result.status == "feasible"
     assert "g4" not in result.assignments
     assert "g5" not in result.assignments
@@ -139,7 +139,7 @@ def test_infeasible_returns_no_assignment() -> None:
             rule("r-diff", RuleKind.DIFFERENT_TABLE, Hardness.HARD, ("g1", "g2")),
         ],
     )
-    result = solve_hard(event, CONFIG)
+    result = solve_hard(event, CONFIG, mode="planning")
     assert result.status == "infeasible"
     assert result.assignments == {}
 
@@ -164,9 +164,9 @@ def test_an_unsettled_solve_raises_rather_than_reporting_infeasible() -> None:
             ),
         ],
     )
-    settled = solve_hard(event, SolverConfig(time_limit_s=5.0, seed=7))
+    settled = solve_hard(event, SolverConfig(time_limit_s=5.0, seed=7), mode="planning")
     assert settled.status == "feasible"
     assert len(settled.assignments) == 60
 
     with pytest.raises(SolverTimeout):
-        solve_hard(event, SolverConfig(time_limit_s=0.0001, seed=7))
+        solve_hard(event, SolverConfig(time_limit_s=0.0001, seed=7), mode="planning")

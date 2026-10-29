@@ -70,6 +70,7 @@ class SolveResult:
     """
 
     status: str  # "feasible" | "infeasible"
+    mode: str  # the optimization mode the result was produced under
     solver_config: SolverConfig  # the configuration that actually made this result
     assignments: dict[str, str] = dataclasses.field(default_factory=dict)
     assigned_count: int = 0
@@ -159,15 +160,18 @@ def summarize(
     event: Event,
     config: SolverConfig,
     infeasibility_report: InfeasibilityReport | None = None,
+    *,
+    mode: str,
 ) -> SolveResult:
     """A chart's assignments plus its whole report, every field computed
     from the chart itself, so there is no second source to drift from.
 
-    The configuration is stamped on too, so a replay of this result —
-    feasible or a proven refutation — rebuilds the solver exactly as it
-    ran when the result was made. A refutation may additionally carry its
-    infeasibility report; an optional final argument, so every existing
-    caller keeps working unchanged.
+    The configuration and the optimization mode are stamped on too, so a
+    replay of this result — feasible or a proven refutation — rebuilds the
+    solver exactly as it ran when the result was made, in the mode that
+    produced it. A refutation may additionally carry its infeasibility
+    report; an optional argument, so the report's callers keep working
+    unchanged.
     """
     rule_states = assess_rules(event, assignments)
     eligible = [guest.id for guest in event.guests if guest.eligible]
@@ -181,6 +185,7 @@ def summarize(
             soft_score += assessment.weight or 0
     return SolveResult(
         status=status,
+        mode=mode,
         solver_config=config,
         assignments=dict(assignments),
         assigned_count=len(assignments),

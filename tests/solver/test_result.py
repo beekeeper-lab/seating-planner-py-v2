@@ -75,7 +75,7 @@ def test_counts_and_score_consistent() -> None:
             rule("r-apart", RuleKind.DIFFERENT_TABLE, Hardness.SOFT, ("g1", "g3"), 1),
         ],
     )
-    result = solve_hard(event, CONFIG)
+    result = solve_hard(event, CONFIG, mode="planning")
     assert result.status == "feasible"
     at = result.assignments
     assert result.assigned_count == len(at) == 3, at
@@ -116,7 +116,7 @@ def test_violations_name_rule_and_guests() -> None:
             rule("r-hard-apart", RuleKind.DIFFERENT_TABLE, Hardness.HARD, ("g1", "g3")),
         ],
     )
-    result = solve_hard(event, CONFIG)
+    result = solve_hard(event, CONFIG, mode="planning")
     assert result.status == "feasible"
     at = result.assignments
     assert at["g1"] == at["g2"], f"the weight-10 pairing was lost: {at}"
@@ -149,7 +149,7 @@ def test_unevaluable_is_not_satisfied() -> None:
             rule("r-together", RuleKind.SAME_TABLE, Hardness.SOFT, ("g1", "g2"), 8),
         ],
     )
-    result = solve_hard(event, CONFIG)
+    result = solve_hard(event, CONFIG, mode="planning")
     assert result.status == "feasible"
     distance, adjacent, together = (
         find(result, rid) for rid in ("r-distance", "r-adjacent", "r-together")
@@ -169,7 +169,7 @@ def test_unevaluable_is_not_satisfied() -> None:
             rule("r-soft", RuleKind.SAME_TABLE, Hardness.SOFT, ("g1", "g2"), 8),
         ],
     )
-    dead_result = solve_hard(dead, CONFIG)
+    dead_result = solve_hard(dead, CONFIG, mode="planning")
     assert dead_result.status == "infeasible"
     assert dead_result.assignments == {}
     dead_soft, dead_hard = (
@@ -204,7 +204,7 @@ def test_rule_accounting_is_complete() -> None:
             ),
         ],
     )
-    result = solve_hard(event, CONFIG)
+    result = solve_hard(event, CONFIG, mode="planning")
     assert result.status == "feasible"
     at = result.assignments
     assert at["g1"] == at["g2"], f"the hard pairing was broken: {at}"

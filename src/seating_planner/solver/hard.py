@@ -45,6 +45,9 @@ from .result import SolveResult, participants_of, summarize
 #: Default bound on the solver's wall time, in seconds.
 DEFAULT_TIME_LIMIT_S: float = 10.0
 
+#: The only optimization mode implemented in this bean.
+PLANNING: str = "planning"
+
 
 @dataclass(frozen=True)
 class SolverConfig:
@@ -216,17 +219,27 @@ def _minimal_conflict(
     return kept
 
 
-def solve_hard(event: Event, config: SolverConfig | None = None) -> SolveResult:
+def solve_hard(
+    event: Event, config: SolverConfig | None = None, *, mode: str
+) -> SolveResult:
     """Assign every eligible guest to exactly one table, or report infeasible.
 
-    Raises SolverTimeout when the solver reports a status that is neither a
-    settled answer (OPTIMAL/FEASIBLE) nor a settled refutation (INFEASIBLE) —
-    the time limit ran out before CP-SAT proved either way.
+    The optimization mode is explicit and required: it is a keyword-only
+    argument with no default, and the only implemented mode is ``PLANNING``.
+
+    Raises ValueError for an unsupported mode, and SolverTimeout when the
+    solver reports a status that is neither a settled answer
+    (OPTIMAL/FEASIBLE) nor a settled refutation (INFEASIBLE) — the time
+    limit ran out before CP-SAT proved either way.
     """
     cfg = config or SolverConfig()
+    if mode != PLANNING:
+        raise ValueError(
+            f"unsupported mode {mode!r}; the only implemented mode is {PLANNING!r}"
+        )
     eligible = [guest.id for guest in event.guests if guest.eligible]
     if not eligible:
-        return summarize("feasible", {}, event, cfg)
+        return summarize("feasible", {}, event, cfg, mode=mode)
     if not event.tables:
         # No tables, no chart, no probe: the failure is named and the
         # recommendation built, and the save is never touched.
@@ -236,6 +249,7 @@ def solve_hard(event: Event, config: SolverConfig | None = None) -> SolveResult:
             event,
             cfg,
             build_infeasibility_report(event, []),
+            mode=mode,
         )
 
     model = cp_model.CpModel()
@@ -364,7 +378,7 @@ def solve_hard(event: Event, config: SolverConfig | None = None) -> SolveResult:
                 )
                 + report.recommendations,
             )
-        return summarize("infeasible", {}, event, cfg, report)
+        return summarize("infeasible", {}, event, cfg, report, mode=mode)
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
         raise SolverTimeout(
             f"no table-level assignment settled within {cfg.time_limit_s}s: "
@@ -376,4 +390,4 @@ def solve_hard(event: Event, config: SolverConfig | None = None) -> SolveResult:
         for table_id, var in per_table.items()
         if solver.boolean_value(var)
     }
-    return summarize("feasible", assignments, event, cfg)
+    return summarize("feasible", assignments, event, cfg, mode=mode)

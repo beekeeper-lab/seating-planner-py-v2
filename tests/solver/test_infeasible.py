@@ -109,7 +109,7 @@ def test_saved_chart_unchanged_on_infeasible(tmp_path: Path) -> None:
     before = db_path.read_bytes()
     audit_before = len(repo.audit_entries(event.id))
 
-    result = solve_hard(event, CONFIG)
+    result = solve_hard(event, CONFIG, mode="planning")
 
     assert result.status == "infeasible", (
         f"the contradictory pair is unseatable by construction, "
@@ -147,7 +147,7 @@ def test_saved_chart_unchanged_on_timeout(
 
     monkeypatch.setattr(hard.cp_model.CpSolver, "solve", _unsettled)
     with pytest.raises(SolverTimeout):
-        solve_hard(event, CONFIG)
+        solve_hard(event, CONFIG, mode="planning")
 
     assert db_path.read_bytes() == before, (
         "FR-052: a timed-out optimization must not modify the "
@@ -165,7 +165,7 @@ def test_conflict_names_hard_constraints(tmp_path: Path) -> None:
     event = conflict_event()
     save_event(event, tmp_path)
 
-    result = solve_hard(event, CONFIG)
+    result = solve_hard(event, CONFIG, mode="planning")
     assert result.status == "infeasible", (
         f"the contradictory pair is unseatable by construction, "
         f"got status {result.status!r}"
@@ -195,7 +195,7 @@ def test_recommends_corrective_action(tmp_path: Path) -> None:
     event = conflict_event()
     save_event(event, tmp_path)
 
-    result = solve_hard(event, CONFIG)
+    result = solve_hard(event, CONFIG, mode="planning")
     assert result.status == "infeasible", (
         f"the contradictory pair is unseatable by construction, "
         f"got status {result.status!r}"
@@ -234,7 +234,7 @@ def test_recommends_corrective_action(tmp_path: Path) -> None:
     # seats — infeasible by pure capacity.
     shortage = capacity_shortage_event()
     save_event(shortage, tmp_path)
-    shortage_result = solve_hard(shortage, CONFIG)
+    shortage_result = solve_hard(shortage, CONFIG, mode="planning")
     assert shortage_result.status == "infeasible", (
         f"three guests over two seats is unseatable, "
         f"got status {shortage_result.status!r}"
