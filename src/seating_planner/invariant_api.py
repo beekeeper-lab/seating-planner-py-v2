@@ -15,6 +15,7 @@ from typing import Any
 from seating_planner.domain import Event, Guest, RsvpStatus, Table
 from seating_planner.rules import Hardness, Rule, RuleKind
 from seating_planner.solver import DEFAULT_TIME_LIMIT_S, SolverConfig, solve_hard
+from seating_planner.solver.hard import PLANNING
 
 _DEFAULT_SEED: int = 0
 
@@ -70,5 +71,8 @@ def solve_from_spec(spec: dict[str, Any]) -> dict[str, Any]:
             time_limit_s=float(config.get("time_limit_s", DEFAULT_TIME_LIMIT_S)),
             seed=int(config.get("seed", _DEFAULT_SEED)),
         ),
+        # The seam's spec shape carries no mode field: a plain
+        # hard-constraint solve is a planning solve.
+        mode=PLANNING,
     )
     return {"status": result.status, "assignments": dict(result.assignments)}
