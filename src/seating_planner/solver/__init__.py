@@ -7,6 +7,12 @@ from .hard import (
     SolverTimeout,
     solve_hard,
 )
+from .report import (
+    CORRECTIVE_KINDS,
+    InfeasibilityReport,
+    Recommendation,
+    build_infeasibility_report,
+)
 from .result import (
     SATISFIED,
     UNEVALUABLE,
@@ -17,14 +23,18 @@ from .result import (
 )
 
 __all__ = [
+    "CORRECTIVE_KINDS",
     "DEFAULT_TIME_LIMIT_S",
     "SATISFIED",
     "UNEVALUABLE",
     "VIOLATED",
+    "InfeasibilityReport",
+    "Recommendation",
     "RuleAssessment",
     "SolveResult",
     "SolverConfig",
     "SolverTimeout",
+    "build_infeasibility_report",
     "solve_hard",
     "summarize",
 ]

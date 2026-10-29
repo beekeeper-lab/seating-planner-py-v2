@@ -25,6 +25,9 @@ if TYPE_CHECKING:
     # Avoids the import cycle: hard.py imports this module at runtime.
     from .hard import SolverConfig
 
+    # Avoids the import cycle: report.py imports participants_of at runtime.
+    from .report import InfeasibilityReport
+
 # Three states; what a chart cannot decide is `unevaluable`, never `satisfied`.
 SATISFIED = "satisfied"
 VIOLATED = "violated"
@@ -60,6 +63,10 @@ class SolveResult:
 
     Every report field is computed from the chart, and the payload is ids
     and numbers only — no field may carry private guest notes.
+
+    ``infeasibility_report`` is present only when the status is
+    "infeasible" — it is why no chart exists, and what could be changed —
+    and absent everywhere else, exactly like its default ``None``.
     """
 
     status: str  # "feasible" | "infeasible"
@@ -69,6 +76,7 @@ class SolveResult:
     unassigned_count: int = 0
     soft_score: int = 0
     rule_states: tuple[RuleAssessment, ...] = ()
+    infeasibility_report: InfeasibilityReport | None = None
 
     @property
     def violations(self) -> tuple[RuleAssessment, ...]:
@@ -150,13 +158,16 @@ def summarize(
     assignments: Mapping[str, str],
     event: Event,
     config: SolverConfig,
+    infeasibility_report: InfeasibilityReport | None = None,
 ) -> SolveResult:
     """A chart's assignments plus its whole report, every field computed
     from the chart itself, so there is no second source to drift from.
 
     The configuration is stamped on too, so a replay of this result —
     feasible or a proven refutation — rebuilds the solver exactly as it
-    ran when the result was made.
+    ran when the result was made. A refutation may additionally carry its
+    infeasibility report; an optional final argument, so every existing
+    caller keeps working unchanged.
     """
     rule_states = assess_rules(event, assignments)
     eligible = [guest.id for guest in event.guests if guest.eligible]
@@ -176,4 +187,5 @@ def summarize(
         unassigned_count=unassigned,
         soft_score=soft_score,
         rule_states=rule_states,
+        infeasibility_report=infeasibility_report,
     )
