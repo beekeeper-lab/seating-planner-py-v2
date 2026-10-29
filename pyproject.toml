@@ -22,3 +22,6 @@ extend-exclude = ["factory"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# importlib, so test modules in different tests/ subfolders may share a basename
+# (tests/domain/test_locks.py and tests/solver/test_locks.py) without __init__.py.
+addopts = "--import-mode=importlib"
