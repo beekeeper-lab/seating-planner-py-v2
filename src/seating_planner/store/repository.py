@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS "guest" (
     rsvp_status TEXT,
     household TEXT,
     seat_reserved INTEGER,
+    locked_to_table TEXT,
     seq INTEGER,
     PRIMARY KEY (event_id, id)
 );
@@ -103,16 +104,27 @@ class AuditEntry:
     timestamp: str
 
 
-def _guest_signature(guest: Guest) -> tuple[str | None, str, str | None, bool]:
-    return (guest.name, guest.rsvp_status.value, guest.household, guest.seat_reserved)
+def _guest_signature(
+    guest: Guest,
+) -> tuple[str | None, str, str | None, bool, str | None]:
+    return (
+        guest.name,
+        guest.rsvp_status.value,
+        guest.household,
+        guest.seat_reserved,
+        guest.locked_to_table,
+    )
 
 
-def _stored_guest(row: sqlite3.Row) -> tuple[str | None, str, str | None, bool]:
+def _stored_guest(
+    row: sqlite3.Row,
+) -> tuple[str | None, str, str | None, bool, str | None]:
     return (
         row["name"],
         row["rsvp_status"],
         row["household"],
         bool(row["seat_reserved"]),
+        row["locked_to_table"],
     )
 
 
@@ -220,8 +232,8 @@ class EventRepository:
             for seq, guest in enumerate(event.guests):
                 self._conn.execute(
                     'INSERT INTO "guest" '
-                    "(id, event_id, name, rsvp_status, household, seat_reserved, seq) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    "(id, event_id, name, rsvp_status, household, seat_reserved, "
+                    "locked_to_table, seq) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         guest.id,
                         event.id,
@@ -229,6 +241,7 @@ class EventRepository:
                         guest.rsvp_status.value,
                         guest.household,
                         int(guest.seat_reserved),
+                        guest.locked_to_table,
                         seq,
                     ),
                 )
@@ -294,6 +307,7 @@ class EventRepository:
                 rsvp_status=RsvpStatus(r["rsvp_status"]),
                 household=r["household"],
                 seat_reserved=bool(r["seat_reserved"]),
+                locked_to_table=r["locked_to_table"],
             )
             for r in self._conn.execute(
                 'SELECT * FROM "guest" WHERE event_id = ? ORDER BY seq', (event_id,)

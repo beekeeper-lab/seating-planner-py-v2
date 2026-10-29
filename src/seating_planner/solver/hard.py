@@ -18,18 +18,20 @@ was settled) is not an answer about the problem at all, so it is never
 reported as "infeasible" — that would tell a satisfiable problem's caller it
 is impossible. It raises SolverTimeout instead.
 
-Every encoded hard rule rides its own assumption literal, so when the
-refutation is proven the solver can say which rules it proved impossible:
-the conflict is found by deletion-minimising the assumption set with cheap
-probe re-solves — a probe that does not settle keeps its literal, so the
-named set is a minimal conflicting subset, never an under-wide one, and the
-same configuration always names the same subset. The report built from it
-is carried on the result (src/seating_planner/solver/report.py).
+Every encoded hard rule and every locked guest rides its own assumption
+literal, so when the refutation is proven the solver can say which rules
+and which locks it proved impossible: the conflict is found by
+deletion-minimising the assumption set with cheap probe re-solves — a
+probe that does not settle keeps its literal, so the named set is a minimal
+conflicting subset, never an under-wide one, and the same configuration
+always names the same subset. The report built from it is carried on the
+result (src/seating_planner/solver/report.py); a kept lock names itself
+there as an "unlock" recommendation alongside the conflicting rule ids.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from ortools.sat.python import cp_model
@@ -37,7 +39,7 @@ from ortools.sat.python import cp_model
 from seating_planner.domain import Event
 from seating_planner.rules import Hardness, Rule, RuleKind
 
-from .report import build_infeasibility_report
+from .report import Recommendation, build_infeasibility_report
 from .result import SolveResult, participants_of, summarize
 
 #: Default bound on the solver's wall time, in seconds.
@@ -183,21 +185,23 @@ def _probe_infeasible(
 
 def _minimal_conflict(
     model: cp_model.CpModel,
-    hard_rules: list[tuple[Rule, Any]],
+    assumptions: list[Any],
     cfg: SolverConfig,
-) -> list[str]:
-    """The minimal conflicting rule ids, by deletion minimisation.
+) -> list[int]:
+    """The indices of the minimal conflicting assumption literals, by
+    deletion minimisation.
 
-    ``hard_rules`` is the encoded (rule, assumption) pairs in the event's
-    rule order, all of whose assumptions the main solve proved infeasible
-    together. If the refutation already holds with every assumption false,
-    the failure is structural — capacity or shape, no rule in it — and the
-    conflict is empty. Otherwise literals are dropped one at a time, in
-    that order: a rule is discarded only when the subset without it still
-    proves infeasible, so each kept literal is load-bearing and the named
-    set is minimal (and, by the same probe discipline, deterministic).
+    ``assumptions`` is the combined encoded assumption literals in the
+    event's rule order first, then the event's guest order for locks, all
+    of which the main solve proved infeasible together. If the refutation
+    already holds with every assumption false, the failure is structural
+    — capacity or shape, nothing named in it — and the conflict is empty.
+    Otherwise literals are dropped one at a time, in that order: a literal
+    is discarded only when the subset without it still proves infeasible,
+    so each kept literal is load-bearing and the named set is minimal (and,
+    by the same probe discipline, deterministic). The caller splits the
+    kept indices back into rule ids and locked guests.
     """
-    assumptions = [assumption for _, assumption in hard_rules]
     if not assumptions:
         return []
     if _probe_infeasible(model, [~a for a in assumptions], cfg):
@@ -209,7 +213,7 @@ def _minimal_conflict(
         without = [j for j in kept if j != index]
         if _probe_infeasible(model, [assumptions[j] for j in without], cfg):
             kept = without
-    return [hard_rules[index][0].id for index in kept]
+    return kept
 
 
 def solve_hard(event: Event, config: SolverConfig | None = None) -> SolveResult:
@@ -247,6 +251,21 @@ def solve_hard(event: Event, config: SolverConfig | None = None) -> SolveResult:
         model.add(sum(seat[guest].values()) == 1)
     for table in event.tables:
         model.add(sum(seat[guest][table.id] for guest in eligible) <= table.capacity)
+
+    # Locks (FR-058): the organizer's decision, carried as a fixed variable
+    # in the model, never as a post-solve correction of the returned chart.
+    # The domain guarantees the locked table exists in the event, so the
+    # locked guest's seat variable at that table exists. Each lock rides
+    # its own assumption literal, exactly as a hard rule does: the main
+    # solve carries it true, and only a probe solve of the refutation may
+    # switch it off, so a proven clash can name the lock it found.
+    locks: list[tuple[str, str, Any]] = []
+    for candidate in event.guests:
+        if candidate.eligible and candidate.locked_to_table is not None:
+            lock_table = candidate.locked_to_table
+            assumption = model.new_bool_var(f"lock-{candidate.id}")
+            model.add(seat[candidate.id][lock_table] == 1).only_enforce_if(assumption)
+            locks.append((candidate.id, lock_table, assumption))
 
     groups = {group.id: group for group in event.groups}
     eligible_ids = frozenset(eligible)
@@ -308,22 +327,44 @@ def solve_hard(event: Event, config: SolverConfig | None = None) -> SolveResult:
     # The pinned default comes from the configuration, and the same
     # configuration is stamped onto the result so the run can be replayed.
     solver.parameters.num_workers = cfg.num_workers
-    if hard_rules:
-        # This CP-SAT build carries the assumption set on the model: the
-        # main solve asks for every rule assumption true, and a solve
-        # without any encoded hard rule stays a plain solve.
-        model.add_assumptions([assumption for _, assumption in hard_rules])
+    # This CP-SAT build carries the assumption set on the model: the main
+    # solve asks for every rule assumption and every lock true, and a solve
+    # with neither stays a plain solve.
+    assumption_literals = [
+        *[assumption for _, assumption in hard_rules],
+        *[assumption for _, _, assumption in locks],
+    ]
+    if assumption_literals:
+        model.add_assumptions(assumption_literals)
     status = solver.solve(model)
     model.clear_assumptions()
     if status == cp_model.INFEASIBLE:
-        conflict_rule_ids = _minimal_conflict(model, hard_rules, cfg)
-        return summarize(
-            "infeasible",
-            {},
-            event,
-            cfg,
-            build_infeasibility_report(event, conflict_rule_ids),
-        )
+        kept = _minimal_conflict(model, assumption_literals, cfg)
+        # The combined list is the rules first, then the locks: split the
+        # kept indices back into rule ids and (guest, table) lock pairs,
+        # without any stringly-typed ids.
+        kept_rule_ids = [hard_rules[i][0].id for i in kept if i < len(hard_rules)]
+        kept_locks = [
+            (locks[i - len(hard_rules)][0], locks[i - len(hard_rules)][1])
+            for i in kept
+            if i >= len(hard_rules)
+        ]
+        report = build_infeasibility_report(event, kept_rule_ids)
+        if kept_locks:
+            # Each lock the minimisation kept appends one unlock
+            # recommendation, in the combined list's order.
+            report = replace(
+                report,
+                recommendations=tuple(
+                    Recommendation(
+                        kind="unlock",
+                        detail=f"guest {guest_id} is locked to table {lock_table}; unlock them",
+                    )
+                    for guest_id, lock_table in kept_locks
+                )
+                + report.recommendations,
+            )
+        return summarize("infeasible", {}, event, cfg, report)
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
         raise SolverTimeout(
             f"no table-level assignment settled within {cfg.time_limit_s}s: "

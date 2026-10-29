@@ -70,6 +70,7 @@ class Guest:
     rsvp_status: RsvpStatus
     household: str | None = None
     seat_reserved: bool = False
+    locked_to_table: str | None = None
 
     def __post_init__(self) -> None:
         self.rsvp_status = RsvpStatus(self.rsvp_status)
@@ -122,6 +123,15 @@ def _validate_event_contents(
         if table.id in seen_table_ids:
             raise ValueError(f"duplicate table identifier {table.id!r}")
         seen_table_ids.add(table.id)
+    for guest in guests:
+        if (
+            guest.locked_to_table is not None
+            and guest.locked_to_table not in seen_table_ids
+        ):
+            raise ValueError(
+                f"guest {guest.id!r} is locked to table "
+                f"{guest.locked_to_table!r}, which is not in the event"
+            )
 
 
 @dataclass
@@ -149,7 +159,39 @@ class Event:
             raise ValueError(f"an event holds at most {MAX_GUESTS} guests")
         if any(g.id == guest.id for g in self.guests):
             raise ValueError(f"duplicate guest identifier {guest.id!r}")
+        if guest.locked_to_table is not None and not any(
+            t.id == guest.locked_to_table for t in self.tables
+        ):
+            raise ValueError(
+                f"guest {guest.id!r} is locked to table "
+                f"{guest.locked_to_table!r}, which is not in the event"
+            )
         self.guests.append(guest)
+
+    def lock_guest(self, guest_id: str, table_id: str) -> None:
+        """Lock ``guest_id`` to ``table_id``: the organizer overriding the optimizer (FR-058).
+
+        A lock is stored domain data — it survives a restart and binds the
+        solver. Only an explicit ``unlock_guest`` releases it. Raises
+        ``ValueError`` if the guest id or table id is not in the event.
+        """
+        guest = next((g for g in self.guests if g.id == guest_id), None)
+        if guest is None:
+            raise ValueError(f"unknown guest identifier {guest_id!r}")
+        if not any(t.id == table_id for t in self.tables):
+            raise ValueError(f"unknown table identifier {table_id!r}")
+        guest.locked_to_table = table_id
+
+    def unlock_guest(self, guest_id: str) -> None:
+        """Release any lock on ``guest_id`` by setting it back to ``None``.
+
+        This is the only thing that releases a lock (FR-058); a re-optimisation
+        never does. Raises ``ValueError`` if the guest id is not in the event.
+        """
+        guest = next((g for g in self.guests if g.id == guest_id), None)
+        if guest is None:
+            raise ValueError(f"unknown guest identifier {guest_id!r}")
+        guest.locked_to_table = None
 
     def add_table(self, table: Table) -> None:
         if len(self.tables) >= MAX_TABLES:
