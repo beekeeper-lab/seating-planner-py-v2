@@ -17,6 +17,14 @@ answer nor a proven refutation (UNKNOWN: the time limit ran out before either
 was settled) is not an answer about the problem at all, so it is never
 reported as "infeasible" — that would tell a satisfiable problem's caller it
 is impossible. It raises SolverTimeout instead.
+
+Every encoded hard rule rides its own assumption literal, so when the
+refutation is proven the solver can say which rules it proved impossible:
+the conflict is found by deletion-minimising the assumption set with cheap
+probe re-solves — a probe that does not settle keeps its literal, so the
+named set is a minimal conflicting subset, never an under-wide one, and the
+same configuration always names the same subset. The report built from it
+is carried on the result (src/seating_planner/solver/report.py).
 """
 
 from __future__ import annotations
@@ -29,6 +37,7 @@ from ortools.sat.python import cp_model
 from seating_planner.domain import Event
 from seating_planner.rules import Hardness, Rule, RuleKind
 
+from .report import build_infeasibility_report
 from .result import SolveResult, participants_of, summarize
 
 #: Default bound on the solver's wall time, in seconds.
@@ -58,26 +67,35 @@ class SolverTimeout(RuntimeError):
 
 
 def _add_same_table(
-    model: cp_model.CpModel, seat: dict[str, dict[str, Any]], participants: list[str]
+    model: cp_model.CpModel,
+    seat: dict[str, dict[str, Any]],
+    participants: list[str],
+    assumption: Any,
 ) -> None:
-    """Pin every participant to the first participant's table, per table var."""
+    """Pin every participant to the first participant's table, per table
+    var — only while the rule's assumption literal is true, so the rule's
+    constraints can be switched off by the probe solves."""
     first = participants[0]
     for table_id, anchor in seat[first].items():
         for other in participants[1:]:
-            model.add(seat[other][table_id] == anchor)
+            model.add(seat[other][table_id] == anchor).only_enforce_if(assumption)
 
 
 def _add_different_table(
-    model: cp_model.CpModel, seat: dict[str, dict[str, Any]], participants: list[str]
+    model: cp_model.CpModel,
+    seat: dict[str, dict[str, Any]],
+    participants: list[str],
+    assumption: Any,
 ) -> None:
-    """No two participants share a table: x_a + x_b <= 1 per pair per table."""
+    """No two participants share a table: x_a + x_b <= 1 per pair per
+    table — only while the rule's assumption literal is true."""
     for table_id in seat[participants[0]]:
         for i in range(len(participants)):
             for j in range(i + 1, len(participants)):
                 model.add(
                     seat[participants[i]][table_id] + seat[participants[j]][table_id]
                     <= 1
-                )
+                ).only_enforce_if(assumption)
 
 
 def _soft_same_table_score(
@@ -134,6 +152,66 @@ def _soft_different_table_score(
     return weight * sat
 
 
+def _probe_infeasible(
+    model: cp_model.CpModel,
+    assumption_literals: list[Any],
+    cfg: SolverConfig,
+) -> bool:
+    """Re-solve the same model under the given literals, once, and report
+    whether the probe proved infeasible. A fresh single-seed CpSolver with
+    the main solve's configuration — same seed, same worker count, time
+    limit no larger than the configured one — so a probe settles the same
+    way the main solve did under identical configuration; a probe that does
+    not settle in time reports not-proved-infeasible, and the caller keeps
+    its literal rather than guessing.
+
+    This CP-SAT build carries the assumption set on the model, so the
+    probe sets its literals, solves, and clears them again — the model is
+    never left holding assumptions of any one solve.
+    """
+    model.clear_assumptions()
+    if assumption_literals:
+        model.add_assumptions(assumption_literals)
+    probe = cp_model.CpSolver()
+    probe.parameters.max_time_in_seconds = cfg.time_limit_s
+    probe.parameters.random_seed = cfg.seed
+    probe.parameters.num_workers = cfg.num_workers
+    status = probe.solve(model)
+    model.clear_assumptions()
+    return status == cp_model.INFEASIBLE
+
+
+def _minimal_conflict(
+    model: cp_model.CpModel,
+    hard_rules: list[tuple[Rule, Any]],
+    cfg: SolverConfig,
+) -> list[str]:
+    """The minimal conflicting rule ids, by deletion minimisation.
+
+    ``hard_rules`` is the encoded (rule, assumption) pairs in the event's
+    rule order, all of whose assumptions the main solve proved infeasible
+    together. If the refutation already holds with every assumption false,
+    the failure is structural — capacity or shape, no rule in it — and the
+    conflict is empty. Otherwise literals are dropped one at a time, in
+    that order: a rule is discarded only when the subset without it still
+    proves infeasible, so each kept literal is load-bearing and the named
+    set is minimal (and, by the same probe discipline, deterministic).
+    """
+    assumptions = [assumption for _, assumption in hard_rules]
+    if not assumptions:
+        return []
+    if _probe_infeasible(model, [~a for a in assumptions], cfg):
+        return []
+    kept: list[int] = list(range(len(assumptions)))
+    for index in range(len(assumptions)):
+        if index not in kept:
+            continue  # already shown not to be load-bearing
+        without = [j for j in kept if j != index]
+        if _probe_infeasible(model, [assumptions[j] for j in without], cfg):
+            kept = without
+    return [hard_rules[index][0].id for index in kept]
+
+
 def solve_hard(event: Event, config: SolverConfig | None = None) -> SolveResult:
     """Assign every eligible guest to exactly one table, or report infeasible.
 
@@ -146,7 +224,15 @@ def solve_hard(event: Event, config: SolverConfig | None = None) -> SolveResult:
     if not eligible:
         return summarize("feasible", {}, event, cfg)
     if not event.tables:
-        return summarize("infeasible", {}, event, cfg)
+        # No tables, no chart, no probe: the failure is named and the
+        # recommendation built, and the save is never touched.
+        return summarize(
+            "infeasible",
+            {},
+            event,
+            cfg,
+            build_infeasibility_report(event, []),
+        )
 
     model = cp_model.CpModel()
     seat: dict[str, dict[str, Any]] = {
@@ -164,6 +250,7 @@ def solve_hard(event: Event, config: SolverConfig | None = None) -> SolveResult:
 
     groups = {group.id: group for group in event.groups}
     eligible_ids = frozenset(eligible)
+    hard_rules: list[tuple[Rule, Any]] = []
     for rule in event.rules:
         if (
             not isinstance(rule, Rule)
@@ -175,10 +262,15 @@ def solve_hard(event: Event, config: SolverConfig | None = None) -> SolveResult:
         participants = participants_of(rule, groups, eligible_ids)
         if len(participants) < 2:
             continue
+        # The rule's constraints are conditional on its own assumption
+        # literal: the main solve carries it true, and on a refutation the
+        # probe solves switch literals off to find the conflict.
+        assumption = model.new_bool_var(f"hard-rule-{rule.id}")
         if rule.kind is RuleKind.SAME_TABLE:
-            _add_same_table(model, seat, participants)
+            _add_same_table(model, seat, participants, assumption)
         else:
-            _add_different_table(model, seat, participants)
+            _add_different_table(model, seat, participants, assumption)
+        hard_rules.append((rule, assumption))
 
     # Soft rules (FR-046): score, don't constrain. The objective is a sum of
     # weight * indicator terms — with hard rules still hard constraints, a
@@ -216,9 +308,22 @@ def solve_hard(event: Event, config: SolverConfig | None = None) -> SolveResult:
     # The pinned default comes from the configuration, and the same
     # configuration is stamped onto the result so the run can be replayed.
     solver.parameters.num_workers = cfg.num_workers
+    if hard_rules:
+        # This CP-SAT build carries the assumption set on the model: the
+        # main solve asks for every rule assumption true, and a solve
+        # without any encoded hard rule stays a plain solve.
+        model.add_assumptions([assumption for _, assumption in hard_rules])
     status = solver.solve(model)
+    model.clear_assumptions()
     if status == cp_model.INFEASIBLE:
-        return summarize("infeasible", {}, event, cfg)
+        conflict_rule_ids = _minimal_conflict(model, hard_rules, cfg)
+        return summarize(
+            "infeasible",
+            {},
+            event,
+            cfg,
+            build_infeasibility_report(event, conflict_rule_ids),
+        )
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
         raise SolverTimeout(
             f"no table-level assignment settled within {cfg.time_limit_s}s: "
