@@ -10,6 +10,16 @@ indicator, so at the optimum each indicator is true exactly when the chart
 satisfies its rule, and no weight can trade against a single hard
 constraint.
 
+Two optimization modes are implemented. ``PLANNING`` returns the
+highest-scoring chart among those that honour every hard rule, exactly as
+above. ``LOW_DISRUPTION`` re-plans around a baseline chart under one added
+hard limit: at most a given number of guests may change tables. Its
+objective is the lexicographic order FR-066 requires — fewer table changes
+always beat a higher soft score, and the score breaks ties among equally
+small movements — expressed as a single big-``B`` linear objective, so a
+score can never buy a disruption, and the limit can make the problem
+infeasible in a way that only capacity-shape infeasibility cannot.
+
 The result is either a complete chart
 or a proven refutation, never a partial chart (FR-050/FR-051): "infeasible"
 means CP-SAT proved no assignment exists. A status that is neither a proven
@@ -31,6 +41,7 @@ there as an "unlock" recommendation alongside the conflicting rule ids.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -45,8 +56,14 @@ from .result import SolveResult, participants_of, summarize
 #: Default bound on the solver's wall time, in seconds.
 DEFAULT_TIME_LIMIT_S: float = 10.0
 
-#: The only optimization mode implemented in this bean.
+#: One of the two optimization modes implemented in this bean: plan from
+#: scratch for the highest soft score among the non-conflicting charts.
 PLANNING: str = "planning"
+
+#: The other implemented mode: keep a baseline chart as intact as possible —
+#: at most ``move_limit`` guests may change tables (hard), and the soft
+#: score breaks ties among the least-disruptive charts (FR-066).
+LOW_DISRUPTION: str = "low_disruption"
 
 
 @dataclass(frozen=True)
@@ -220,24 +237,75 @@ def _minimal_conflict(
 
 
 def solve_hard(
-    event: Event, config: SolverConfig | None = None, *, mode: str
+    event: Event,
+    config: SolverConfig | None = None,
+    *,
+    mode: str,
+    current_assignments: Mapping[str, str] | None = None,
+    move_limit: int | None = None,
 ) -> SolveResult:
     """Assign every eligible guest to exactly one table, or report infeasible.
 
     The optimization mode is explicit and required: it is a keyword-only
-    argument with no default, and the only implemented mode is ``PLANNING``.
+    argument with no default. The implemented modes are ``PLANNING`` and
+    ``LOW_DISRUPTION``; the latter takes a baseline chart
+    (``current_assignments``) and a hard cap (``move_limit``) on how many
+    guests may change tables, and optimises fewer changes first, score
+    second (FR-066).
 
-    Raises ValueError for an unsupported mode, and SolverTimeout when the
-    solver reports a status that is neither a settled answer
+    Raises ValueError for an unsupported mode or for mode-inconsistent
+    baseline arguments (planning with baseline inputs, a low-disruption
+    solve missing its baseline or limit, a non-int or negative limit, or a
+    baseline naming an id the event does not have), and SolverTimeout when
+    the solver reports a status that is neither a settled answer
     (OPTIMAL/FEASIBLE) nor a settled refutation (INFEASIBLE) — the time
     limit ran out before CP-SAT proved either way.
     """
     cfg = config or SolverConfig()
-    if mode != PLANNING:
+    if mode not in (PLANNING, LOW_DISRUPTION):
         raise ValueError(
-            f"unsupported mode {mode!r}; the only implemented mode is {PLANNING!r}"
+            f"unsupported mode {mode!r}; the implemented modes are "
+            f"{PLANNING!r} and {LOW_DISRUPTION!r}"
         )
+    low_disruption = mode == LOW_DISRUPTION
+    baseline: Mapping[str, str]
+    limit: int
+    if low_disruption:
+        if current_assignments is None or move_limit is None:
+            raise ValueError(
+                f"{LOW_DISRUPTION!r} mode requires both current_assignments "
+                "and move_limit"
+            )
+        # type() rather than isinstance: a bool is not a move limit.
+        if type(move_limit) is not int or move_limit < 0:
+            raise ValueError(f"move_limit must be an int >= 0, got {move_limit!r}")
+        baseline = current_assignments
+        limit = move_limit
+    else:
+        if current_assignments is not None or move_limit is not None:
+            raise ValueError(
+                "current_assignments and move_limit are only accepted in "
+                f"{LOW_DISRUPTION!r} mode"
+            )
+        baseline = {}
+        limit = 0
     eligible = [guest.id for guest in event.guests if guest.eligible]
+    if low_disruption:
+        # The baseline must name ids the event has: an eligible guest for
+        # every key, an event table for every value. A missing key is a new
+        # arrival — no current table, no movement cost — and never an error.
+        table_ids = frozenset(table.id for table in event.tables)
+        for guest_id, table_id in baseline.items():
+            if guest_id not in eligible:
+                raise ValueError(
+                    f"current_assignments names {guest_id!r}, "
+                    "which is not an eligible guest of this event"
+                )
+            if table_id not in table_ids:
+                raise ValueError(
+                    f"current_assignments seats a guest at {table_id!r}, "
+                    "which is not a table of this event"
+                )
     if not eligible:
         return summarize("feasible", {}, event, cfg, mode=mode)
     if not event.tables:
@@ -281,6 +349,34 @@ def solve_hard(
             model.add(seat[candidate.id][lock_table] == 1).only_enforce_if(assumption)
             locks.append((candidate.id, lock_table, assumption))
 
+    # Movement (FR-066), low_disruption only: one moved flag per eligible
+    # guest records whether the chart puts them anywhere but their current
+    # table, and one hard constraint — riding its own assumption literal,
+    # a third kind alongside the rules' and the locks' — caps how many
+    # guests may move, so a proven refutation that keeps the literal can
+    # name the limit as its cause.
+    moved_vars: dict[str, Any] = {}
+    limit_assumption: Any = None
+    if low_disruption:
+        for guest in eligible:
+            moved = model.new_bool_var(f"moved-{guest}")
+            moved_vars[guest] = moved
+            current_table = baseline.get(guest)
+            if current_table is not None:
+                # Every table other than the guest's current one implies
+                # moved, so the variable is forced true exactly when the
+                # guest is anywhere but their current table; the objective
+                # pushes it down, which is what keeps it a faithful record.
+                # A guest the baseline does not know (a new arrival) gets
+                # no such constraints — they are not moving from anywhere.
+                for other in seat[guest]:
+                    if other != current_table:
+                        model.add(seat[guest][other] <= moved)
+        limit_assumption = model.new_bool_var("move-limit")
+        model.add(sum(moved_vars.values(), 0) <= limit).only_enforce_if(
+            limit_assumption
+        )
+
     groups = {group.id: group for group in event.groups}
     eligible_ids = frozenset(eligible)
     hard_rules: list[tuple[Rule, Any]] = []
@@ -309,6 +405,9 @@ def solve_hard(
     # weight * indicator terms — with hard rules still hard constraints, a
     # weight-100 soft rule can never trade against, let alone violate, one.
     objective_terms: list[Any] = []
+    # The sum of the weights of exactly the rules that build score terms;
+    # low_disruption's objective is built from this same filtered set.
+    scored_weight_sum = 0
     for rule in event.rules:
         if (
             not isinstance(rule, Rule)
@@ -330,7 +429,22 @@ def solve_hard(
                     model, seat, rule, participants, rule.weight
                 )
             )
-    if objective_terms:
+        scored_weight_sum += rule.weight
+    if low_disruption:
+        # Big-B objective: one extra table change costs B, where
+        # B = 1 + the total weight of the scored soft rules. Every chart's
+        # soft score is in 0..B-1, so one extra move costs more than the
+        # most score any chart could earn — a score can never buy a
+        # disruption — and among charts that move equally many guests the
+        # higher score wins. That is the lexicographic order FR-066
+        # requires, not a weighted sum; with no scored rules B is 1 and
+        # the objective reduces to minimising the number of moves.
+        big_b = 1 + scored_weight_sum
+        objective = big_b * sum(moved_vars.values(), 0)
+        if objective_terms:
+            objective = objective - sum(objective_terms)
+        model.minimize(objective)
+    elif objective_terms:
         model.maximize(sum(objective_terms))
 
     solver = cp_model.CpSolver()
@@ -342,28 +456,45 @@ def solve_hard(
     # configuration is stamped onto the result so the run can be replayed.
     solver.parameters.num_workers = cfg.num_workers
     # This CP-SAT build carries the assumption set on the model: the main
-    # solve asks for every rule assumption and every lock true, and a solve
-    # with neither stays a plain solve.
-    assumption_literals = [
-        *[assumption for _, assumption in hard_rules],
-        *[assumption for _, _, assumption in locks],
-    ]
+    # solve asks for every rule assumption and every lock true (and, in
+    # low_disruption, the movement limit first of all), and a solve with
+    # neither stays a plain solve.
+    assumption_literals: list[Any] = []
+    if limit_assumption is not None:
+        assumption_literals.append(limit_assumption)
+    assumption_literals.extend(assumption for _, assumption in hard_rules)
+    assumption_literals.extend(assumption for _, _, assumption in locks)
     if assumption_literals:
         model.add_assumptions(assumption_literals)
     status = solver.solve(model)
     model.clear_assumptions()
     if status == cp_model.INFEASIBLE:
         kept = _minimal_conflict(model, assumption_literals, cfg)
-        # The combined list is the rules first, then the locks: split the
-        # kept indices back into rule ids and (guest, table) lock pairs,
+        # The combined list is — low_disruption only — the movement-limit
+        # literal first, then the rules, then the locks: split the kept
+        # indices back into rule ids and (guest, table) lock pairs,
         # without any stringly-typed ids.
-        kept_rule_ids = [hard_rules[i][0].id for i in kept if i < len(hard_rules)]
-        kept_locks = [
-            (locks[i - len(hard_rules)][0], locks[i - len(hard_rules)][1])
+        limit_index = 1 if limit_assumption is not None else 0
+        kept_rule_ids = [
+            hard_rules[i - limit_index][0].id
             for i in kept
-            if i >= len(hard_rules)
+            if limit_index <= i < limit_index + len(hard_rules)
         ]
-        report = build_infeasibility_report(event, kept_rule_ids)
+        kept_locks = [
+            (
+                locks[i - limit_index - len(hard_rules)][0],
+                locks[i - limit_index - len(hard_rules)][1],
+            )
+            for i in kept
+            if i >= limit_index + len(hard_rules)
+        ]
+        # The limit is named as a cause only when the minimisation kept its
+        # literal: a rule conflict, or a conflict of pure capacity shape,
+        # in this mode is still reported as one.
+        limit_kept = limit_assumption is not None and 0 in kept
+        report = build_infeasibility_report(
+            event, kept_rule_ids, movement_limit=limit if limit_kept else None
+        )
         if kept_locks:
             # Each lock the minimisation kept appends one unlock
             # recommendation, in the combined list's order.
