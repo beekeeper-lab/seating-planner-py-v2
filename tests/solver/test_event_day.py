@@ -36,7 +36,7 @@ import pytest
 from seating_planner.domain import Event, Guest, RsvpStatus, Table
 from seating_planner.rules import Hardness, Rule, RuleKind
 from seating_planner.solver import SolverConfig, solve_hard
-from seating_planner.solver.hard import PLANNING
+from seating_planner.solver.hard import EVENT_DAY, PLANNING
 
 CONFIG = SolverConfig(time_limit_s=5.0, seed=7)
 
@@ -96,7 +96,7 @@ def test_new_guest_takes_open_seat() -> None:
         rules=[same_rule("r-g1g2g3", ("g1", "g2", "g3"), 100)],
     )
 
-    result = solve_hard(event, CONFIG, mode="event_day", current_assignments=current)
+    result = solve_hard(event, CONFIG, mode=EVENT_DAY, current_assignments=current)
 
     assert result.status == "feasible", (
         f"t1 holds two of the three guests and has room for the third, "
@@ -142,7 +142,7 @@ def test_existing_assignments_implicitly_locked() -> None:
             f"{g.id} carries no lock, got {g.locked_to_table!r}"
         )
 
-    result = solve_hard(event, CONFIG, mode="event_day", current_assignments=current)
+    result = solve_hard(event, CONFIG, mode=EVENT_DAY, current_assignments=current)
 
     assert result.status == "feasible", (
         f"the current chart honours every capacity, so a chart exists, "
@@ -191,7 +191,7 @@ def test_cancellation_moves_nobody() -> None:
         rules=[same_rule("r-g1g3", ("g1", "g3"), 100)],
     )
 
-    before = solve_hard(full, CONFIG, mode="event_day", current_assignments=current)
+    before = solve_hard(full, CONFIG, mode=EVENT_DAY, current_assignments=current)
     assert before.status == "feasible", (
         f"the current chart honours every capacity, so a chart exists, "
         f"got status {before.status!r}"
@@ -214,7 +214,7 @@ def test_cancellation_moves_nobody() -> None:
     after_current = {"g1": "t1", "g3": "t2"}
 
     result = solve_hard(
-        after_event, CONFIG, mode="event_day", current_assignments=after_current
+        after_event, CONFIG, mode=EVENT_DAY, current_assignments=after_current
     )
 
     assert result.status == "feasible", (
@@ -261,7 +261,7 @@ def test_explicit_unlock_permits_move() -> None:
         result = solve_hard(
             build_event("e-ac4"),
             CONFIG,
-            mode="event_day",
+            mode=EVENT_DAY,
             current_assignments=current,
             unlocked_guest_ids=frozenset({"g1"}),
         )
@@ -326,7 +326,7 @@ def test_new_guest_respects_hard_rules() -> None:
     result = solve_hard(
         build_event("e-ac5", True),
         CONFIG,
-        mode="event_day",
+        mode=EVENT_DAY,
         current_assignments=current,
     )
 
@@ -365,7 +365,7 @@ def test_new_guest_respects_hard_rules() -> None:
     unplanned = solve_hard(
         build_event("e-ac5-soft-only", False),
         CONFIG,
-        mode="event_day",
+        mode=EVENT_DAY,
         current_assignments=current,
     )
     assert unplanned.status == "feasible", (
@@ -402,7 +402,7 @@ def test_full_room_is_infeasible() -> None:
         rules=[],
     )
 
-    result = solve_hard(event, CONFIG, mode="event_day", current_assignments=current)
+    result = solve_hard(event, CONFIG, mode=EVENT_DAY, current_assignments=current)
 
     assert result.status == "infeasible", (
         f"three guests over two seats and one table: no chart exists, "
