@@ -27,6 +27,7 @@ CORRECTIVE_KINDS: tuple[str, ...] = (
     "add_table",
     "unlock",
     "change_hard_rule",
+    "raise_movement_limit",
 )
 
 
@@ -52,7 +53,10 @@ class InfeasibilityReport:
 
 
 def build_infeasibility_report(
-    event: Event, conflicting_rule_ids: Sequence[str]
+    event: Event,
+    conflicting_rule_ids: Sequence[str],
+    *,
+    movement_limit: int | None = None,
 ) -> InfeasibilityReport:
     """Name the conflicting hard rules and recommend at least one fix.
 
@@ -65,9 +69,12 @@ def build_infeasibility_report(
     its affected guests, and for a conflicting different_table rule a
     further add-a-table recommendation whenever the number of tables is
     below that rule's participant count — such a rule needs one distinct
-    table per participant; (4) if nothing so far produced a
-    recommendation, one add-a-table recommendation so the list is never
-    empty.
+    table per participant; when a low-disruption movement limit is
+    provided, exactly one raise-the-movement-limit recommendation naming
+    the numeric limit (and counts only, never guest names); (4) if
+    nothing so far produced a recommendation, one add-a-table
+    recommendation so the list is never empty. Existing callers pass no
+    limit and keep today's behaviour exactly.
     """
     eligible_ids = frozenset(guest.id for guest in event.guests if guest.eligible)
     groups = {group.id: group for group in event.groups}
@@ -125,6 +132,22 @@ def build_infeasibility_report(
                     ),
                 )
             )
+
+    if movement_limit is not None:
+        # The limit's own cause, named with the numeric limit and counts
+        # only — the limit is the cause only because the deletion
+        # minimisation kept its literal, so no move count this low can
+        # honour the rest, and capacity and rules are not to blame.
+        recommendations.append(
+            Recommendation(
+                kind="raise_movement_limit",
+                detail=(
+                    f"keeping at most {movement_limit} of "
+                    f"{eligible_count} eligible guests at their current "
+                    "table leaves no valid chart; raise the movement limit"
+                ),
+            )
+        )
 
     if not recommendations:
         recommendations.append(
