@@ -20,9 +20,16 @@ import sqlite3
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 
 from ..domain import Event, Group, Guest, RsvpStatus, Table
 from ..rules import Rule
+
+if TYPE_CHECKING:
+    # Type-only: ``accept`` checks the solver-stamped status on the way in,
+    # but the store adds no runtime dependency on the solver layer (which
+    # imports nothing from the store), so there is no cycle.
+    from ..solver.proposals import Proposal
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS "event" (
@@ -220,6 +227,24 @@ class EventRepository:
                 (event_id,),
             )
         }
+
+    def accept(self, proposal: Proposal, actor: str) -> None:
+        """Apply a proposal's chart through ``save_chart``, naming *actor*.
+
+        The check comes before any write at all: a proposal whose
+        ``status`` is not ``"feasible"`` raises ``ValueError`` naming the
+        event id and the status, touching nothing — no chart row, no audit
+        row. ``status`` is data the solver stamped on the value, not
+        something the store re-derives; a feasible proposal is never
+        refused, however small its ``comparison``.
+        """
+        if proposal.status != "feasible":
+            raise ValueError(
+                f"refusing to accept the proposal for event "
+                f"{proposal.event_id!r} with status {proposal.status!r}: "
+                "nothing was written"
+            )
+        self.save_chart(proposal.event_id, proposal.assignments, actor)
 
     def save(self, event: Event, actor: str) -> None:
         """Persist *event* (replacing any stored version), in one transaction.
