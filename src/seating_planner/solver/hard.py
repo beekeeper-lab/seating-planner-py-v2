@@ -10,7 +10,7 @@ indicator, so at the optimum each indicator is true exactly when the chart
 satisfies its rule, and no weight can trade against a single hard
 constraint.
 
-Two optimization modes are implemented. ``PLANNING`` returns the
+Three optimization modes are implemented. ``PLANNING`` returns the
 highest-scoring chart among those that honour every hard rule, exactly as
 above. ``LOW_DISRUPTION`` re-plans around a baseline chart under one added
 hard limit: at most a given number of guests may change tables. Its
@@ -19,6 +19,16 @@ always beat a higher soft score, and the score breaks ties among equally
 small movements — expressed as a single big-``B`` linear objective, so a
 score can never buy a disruption, and the limit can make the problem
 infeasible in a way that only capacity-shape infeasibility cannot.
+``EVENT_DAY`` serves the day the event is already running (FR-067):
+the caller supplies the current chart, and every baseline guest is
+pinned to their current table — encoded as an implicit lock on the same
+locks list, so it rides an assumption literal and can be named in a
+refutation — with one exception: a guest the caller names in
+``unlocked_guest_ids`` is a free variable. The objective is the highest
+soft score with everything existing still pinned (FR-066's modes never
+re-plan opportunistically): a freed seat, for instance, stays empty
+rather than inviting a neighbour in, and a cancellation moves no one
+(FR-071).
 
 The result is either a complete chart
 or a proven refutation, never a partial chart (FR-050/FR-051): "infeasible"
@@ -56,14 +66,19 @@ from .result import SolveResult, participants_of, summarize
 #: Default bound on the solver's wall time, in seconds.
 DEFAULT_TIME_LIMIT_S: float = 10.0
 
-#: One of the two optimization modes implemented in this bean: plan from
+#: One of the three optimization modes implemented in this bean: plan from
 #: scratch for the highest soft score among the non-conflicting charts.
 PLANNING: str = "planning"
 
-#: The other implemented mode: keep a baseline chart as intact as possible —
+#: The re-planning mode: keep a baseline chart as intact as possible —
 #: at most ``move_limit`` guests may change tables (hard), and the soft
 #: score breaks ties among the least-disruptive charts (FR-066).
 LOW_DISRUPTION: str = "low_disruption"
+
+#: The day-of mode (FR-067, FR-071): the current chart is served, every
+#: baseline guest pinned to their table unless the caller explicitly
+#: unlocks them, and no one is moved to fill a freed seat.
+EVENT_DAY: str = "event_day"
 
 
 @dataclass(frozen=True)
@@ -243,31 +258,38 @@ def solve_hard(
     mode: str,
     current_assignments: Mapping[str, str] | None = None,
     move_limit: int | None = None,
+    unlocked_guest_ids: frozenset[str] | None = None,
 ) -> SolveResult:
     """Assign every eligible guest to exactly one table, or report infeasible.
 
     The optimization mode is explicit and required: it is a keyword-only
-    argument with no default. The implemented modes are ``PLANNING`` and
-    ``LOW_DISRUPTION``; the latter takes a baseline chart
-    (``current_assignments``) and a hard cap (``move_limit``) on how many
-    guests may change tables, and optimises fewer changes first, score
-    second (FR-066).
+    argument with no default. The implemented modes are ``PLANNING``,
+    ``LOW_DISRUPTION`` and ``EVENT_DAY``. ``LOW_DISRUPTION`` takes a
+    baseline chart (``current_assignments``) and a hard cap (``move_limit``)
+    on how many guests may change tables, and optimises fewer changes first,
+    score second (FR-066). ``EVENT_DAY`` takes the same baseline chart and
+    pins every baseline guest to their current table until the caller
+    names an explicit exception in ``unlocked_guest_ids`` (FR-067); a
+    freed seat stays empty rather than inviting a neighbour in (FR-071).
 
     Raises ValueError for an unsupported mode or for mode-inconsistent
     baseline arguments (planning with baseline inputs, a low-disruption
-    solve missing its baseline or limit, a non-int or negative limit, or a
-    baseline naming an id the event does not have), and SolverTimeout when
-    the solver reports a status that is neither a settled answer
-    (OPTIMAL/FEASIBLE) nor a settled refutation (INFEASIBLE) — the time
-    limit ran out before CP-SAT proved either way.
+    solve missing its baseline or limit, a non-int or negative limit, an
+    event-day solve missing its baseline or given a move_limit, an
+    unlocked id that is not in the baseline, or a baseline naming an id
+    the event does not have), and SolverTimeout when the solver reports a
+    status that is neither a settled answer (OPTIMAL/FEASIBLE) nor a
+    settled refutation (INFEASIBLE) — the time limit ran out before CP-SAT
+    proved either way.
     """
     cfg = config or SolverConfig()
-    if mode not in (PLANNING, LOW_DISRUPTION):
+    if mode not in (PLANNING, LOW_DISRUPTION, EVENT_DAY):
         raise ValueError(
             f"unsupported mode {mode!r}; the implemented modes are "
-            f"{PLANNING!r} and {LOW_DISRUPTION!r}"
+            f"{PLANNING!r}, {LOW_DISRUPTION!r} and {EVENT_DAY!r}"
         )
     low_disruption = mode == LOW_DISRUPTION
+    event_day = mode == EVENT_DAY
     baseline: Mapping[str, str]
     limit: int
     if low_disruption:
@@ -281,16 +303,36 @@ def solve_hard(
             raise ValueError(f"move_limit must be an int >= 0, got {move_limit!r}")
         baseline = current_assignments
         limit = move_limit
-    else:
-        if current_assignments is not None or move_limit is not None:
+    elif event_day:
+        if current_assignments is None:
+            raise ValueError(f"{EVENT_DAY!r} mode requires current_assignments")
+        if move_limit is not None:
             raise ValueError(
-                "current_assignments and move_limit are only accepted in "
-                f"{LOW_DISRUPTION!r} mode"
+                f"{EVENT_DAY!r} mode does not accept move_limit, got {move_limit!r}"
+            )
+        if unlocked_guest_ids is not None:
+            for guest_id in unlocked_guest_ids:
+                if guest_id not in current_assignments:
+                    raise ValueError(
+                        f"unlocked_guest_ids names {guest_id!r}, "
+                        "which is not a guest of the baseline chart"
+                    )
+        baseline = current_assignments
+        limit = 0
+    else:
+        if (
+            current_assignments is not None
+            or move_limit is not None
+            or unlocked_guest_ids is not None
+        ):
+            raise ValueError(
+                "current_assignments, move_limit and unlocked_guest_ids "
+                f"are only accepted in {LOW_DISRUPTION!r} and {EVENT_DAY!r} modes"
             )
         baseline = {}
         limit = 0
     eligible = [guest.id for guest in event.guests if guest.eligible]
-    if low_disruption:
+    if low_disruption or event_day:
         # The baseline must name ids the event has: an eligible guest for
         # every key, an event table for every value. A missing key is a new
         # arrival — no current table, no movement cost — and never an error.
@@ -348,6 +390,26 @@ def solve_hard(
             assumption = model.new_bool_var(f"lock-{candidate.id}")
             model.add(seat[candidate.id][lock_table] == 1).only_enforce_if(assumption)
             locks.append((candidate.id, lock_table, assumption))
+
+    # Implicit pins (FR-067), event_day only: every baseline guest is
+    # treated as locked to their current table unless the caller named
+    # them in unlocked_guest_ids, and each pin is an entry of the same
+    # locks list — so it rides its own assumption literal, can be named
+    # in a proven refutation, and surfaces as an "unlock" recommendation
+    # if it ever proves load-bearing. A guest already explicitly locked
+    # carries one lock, not two; a freed seat (a guest absent from the
+    # re-read event) simply has no pin (FR-071), and the planning
+    # objective below is the one that maximises the soft score with
+    # everything existing held — no opportunistic re-plan of a pinned chart.
+    unlocked = frozenset() if unlocked_guest_ids is None else unlocked_guest_ids
+    if event_day:
+        pinned = {guest_id for guest_id, _, _ in locks}
+        for guest_id, lock in baseline.items():
+            if guest_id in unlocked or guest_id in pinned:
+                continue
+            assumption = model.new_bool_var(f"lock-{guest_id}")
+            model.add(seat[guest_id][lock] == 1).only_enforce_if(assumption)
+            locks.append((guest_id, lock, assumption))
 
     # Movement (FR-066), low_disruption only: one moved flag per eligible
     # guest records whether the chart puts them anywhere but their current
