@@ -13,6 +13,7 @@ from .hard import (
     SolverTimeout,
     solve_hard,
 )
+from .proposals import Change, Proposal, optimize
 from .report import (
     CORRECTIVE_KINDS,
     InfeasibilityReport,
@@ -37,7 +38,9 @@ __all__ = [
     "VIOLATED",
     "AdmissionResult",
     "Alternative",
+    "Change",
     "InfeasibilityReport",
+    "Proposal",
     "Recommendation",
     "RuleAssessment",
     "SolveResult",
@@ -45,6 +48,7 @@ __all__ = [
     "SolverTimeout",
     "admit_new_guest",
     "build_infeasibility_report",
+    "optimize",
     "solve_hard",
     "summarize",
 ]
