@@ -143,7 +143,15 @@ def test_audit_log_is_append_only(tmp_path) -> None:
         for name in dir(EventRepository)
         if not name.startswith("_") and callable(getattr(EventRepository, name))
     }
-    assert public_methods <= {"save", "load", "audit_entries", "close"}
+    assert public_methods <= {
+        "save",
+        "load",
+        "audit_entries",
+        "close",
+        "save_chart",
+        "load_chart",
+        "accept",
+    }
 
 
 def test_removal_writes_audit_entry(tmp_path) -> None:

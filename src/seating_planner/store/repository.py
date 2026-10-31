@@ -17,11 +17,19 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 
 from ..domain import Event, Group, Guest, RsvpStatus, Table
 from ..rules import Rule
+
+if TYPE_CHECKING:
+    # Type-only: ``accept`` checks the solver-stamped status on the way in,
+    # but the store adds no runtime dependency on the solver layer (which
+    # imports nothing from the store), so there is no cycle.
+    from ..solver.proposals import Proposal
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS "event" (
@@ -79,6 +87,12 @@ CREATE TABLE IF NOT EXISTS audit_log (
     entity_id TEXT,
     actor TEXT,
     ts TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS chart (
+    event_id TEXT,
+    guest_id TEXT,
+    table_id TEXT,
+    PRIMARY KEY (event_id, guest_id)
 );
 CREATE TRIGGER IF NOT EXISTS audit_log_no_update
 BEFORE UPDATE ON audit_log
@@ -160,6 +174,77 @@ class EventRepository:
     def close(self) -> None:
         """Close the underlying connection."""
         self._conn.close()
+
+    def save_chart(
+        self, event_id: str, assignments: Mapping[str, str], actor: str
+    ) -> None:
+        """Replace the event's stored chart, *assignments* mapped guest id to
+        table id, and append one ``chart_saved`` audit row.
+
+        A stored chart is historical organizer state, not a solver output: it
+        is deliberately written without re-checking capacities or table
+        existence, because a chart that overfills a shrunken table is exactly
+        what must remain savable. Unknown event ids raise ``KeyError``, like
+        ``load`` does. The delete, the inserts and the audit row commit
+        together or roll back together (NFR-013).
+        """
+        row = self._conn.execute(
+            'SELECT id FROM "event" WHERE id = ?', (event_id,)
+        ).fetchone()
+        if row is None:
+            raise KeyError(f"no stored event with id {event_id!r}")
+
+        timestamp = datetime.now(UTC).isoformat()
+        with self._conn:
+            self._conn.execute("DELETE FROM chart WHERE event_id = ?", (event_id,))
+            for guest_id, table_id in assignments.items():
+                self._conn.execute(
+                    "INSERT INTO chart (event_id, guest_id, table_id) VALUES (?, ?, ?)",
+                    (event_id, guest_id, table_id),
+                )
+            self._conn.execute(
+                "INSERT INTO audit_log "
+                "(event_id, action, entity_type, entity_id, actor, ts) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (event_id, "chart_saved", "chart", event_id, actor, timestamp),
+            )
+
+    def load_chart(self, event_id: str) -> dict[str, str]:
+        """Return the event's stored chart as a guest id to table id mapping.
+
+        Raises ``KeyError`` when no event with that id is stored; a stored
+        event whose chart was never saved loads as an empty dict.
+        """
+        row = self._conn.execute(
+            'SELECT id FROM "event" WHERE id = ?', (event_id,)
+        ).fetchone()
+        if row is None:
+            raise KeyError(f"no stored event with id {event_id!r}")
+        return {
+            r["guest_id"]: r["table_id"]
+            for r in self._conn.execute(
+                "SELECT guest_id, table_id FROM chart WHERE event_id = ?",
+                (event_id,),
+            )
+        }
+
+    def accept(self, proposal: Proposal, actor: str) -> None:
+        """Apply a proposal's chart through ``save_chart``, naming *actor*.
+
+        The check comes before any write at all: a proposal whose
+        ``status`` is not ``"feasible"`` raises ``ValueError`` naming the
+        event id and the status, touching nothing — no chart row, no audit
+        row. ``status`` is data the solver stamped on the value, not
+        something the store re-derives; a feasible proposal is never
+        refused, however small its ``comparison``.
+        """
+        if proposal.status != "feasible":
+            raise ValueError(
+                f"refusing to accept the proposal for event "
+                f"{proposal.event_id!r} with status {proposal.status!r}: "
+                "nothing was written"
+            )
+        self.save_chart(proposal.event_id, proposal.assignments, actor)
 
     def save(self, event: Event, actor: str) -> None:
         """Persist *event* (replacing any stored version), in one transaction.
