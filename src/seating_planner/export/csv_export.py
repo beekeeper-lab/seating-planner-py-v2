@@ -146,3 +146,33 @@ def guest_to_table_export(
         actor=actor,
         guest_count=len(event.guests),
     )
+
+
+#: Every column the table-by-table export carries, in header order. The
+#: organizer's view — who is at which table — and, like the guest-to-table
+#: export, nothing outside this allow-list ever gets a column.
+TABLE_BY_TABLE_COLUMNS: tuple[str, ...] = (
+    "table_id",
+    "table_name",
+    "guest_id",
+    "guest_name",
+)
+
+
+def table_by_table_export(event: Event, assignments: Mapping[str, str]) -> str:
+    """Build the table-by-table CSV: one flat row per assigned guest.
+
+    Tables and guests run in event order; a guest on the event that
+    ``assignments`` maps to a table on the event gets exactly one row and no
+    other rows exist — unassigned guests have no row, empty tables no line,
+    and assignments naming an unknown guest or table are skipped. Cells are
+    allow-listed, so no privacy field reaches the text.
+    """
+    buffer = io.StringIO()
+    writer = csv.writer(buffer, lineterminator="\n")
+    writer.writerow(TABLE_BY_TABLE_COLUMNS)
+    for table in event.tables:
+        for guest in event.guests:
+            if assignments.get(guest.id) == table.id:
+                writer.writerow([table.id, table.name, guest.id, guest.name])
+    return buffer.getvalue()
