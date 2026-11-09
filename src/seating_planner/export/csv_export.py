@@ -36,6 +36,17 @@ DEFAULT_COLUMNS: tuple[str, ...] = (
 
 #: The only names that may cross the allow-list, each with a plain-English
 #: sentence of what exposing it reveals.
+#: Every column in the table-by-table export, in header order. A column
+#: exists only if it is named here; nothing else ever gets a cell.
+TABLE_BY_TABLE_COLUMNS: tuple[str, ...] = (
+    "table_id",
+    "table_name",
+    "guest_id",
+    "guest_name",
+)
+
+#: The only names that may cross the allow-list, each with a plain-English
+#: sentence of what exposing it reveals.
 PRIVATE_GUEST_FIELDS: dict[str, str] = {
     "locked_to_table": (
         "the table the organizer locked the guest to - an override of the optimizer"
@@ -168,3 +179,24 @@ def guest_to_table_export(
         actor=actor,
         guest_count=len(event.guests),
     )
+
+
+def table_by_table_export(event: Event, assignments: Mapping[str, str]) -> str:
+    """Build the table-by-table CSV text: who is at which table.
+
+    One data row per assigned guest — every assigned guest exactly once,
+    unassigned guests nowhere — in table order (``event.tables``) and,
+    within a table, guest order (``event.guests``). Cells are read one by
+    one from ``TABLE_BY_TABLE_COLUMNS``; none carries private data by
+    construction, so no audit or warning is attached.
+    """
+    rows: list[list[str]] = [list(TABLE_BY_TABLE_COLUMNS)]
+    for table in event.tables:
+        for guest in event.guests:
+            if assignments.get(guest.id) != table.id:
+                continue
+            rows.append([table.id, table.name, guest.id, guest.name])
+
+    buffer = io.StringIO()
+    csv.writer(buffer, lineterminator="\n").writerows(rows)
+    return buffer.getvalue()
