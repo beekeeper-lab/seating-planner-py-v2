@@ -104,17 +104,25 @@ def _is_hard(rule: Rule, kind: RuleKind) -> bool:
 
 
 def _oversized_groups(event: Event, rules: list[Rule]) -> list[Finding]:
+    """Hard same-table groups outgrow the largest table by SEATED size.
+
+    Only the members the solver will actually seat are counted (bean-022):
+    ``Guest.eligible`` guests — confirmed, or pending with a reserved seat.
+    Declined and unreserved-pending members (and member ids that no guest
+    in the event carries) no longer make a feasible event look impossible,
+    agreeing with ``_total_capacity``, which already counts the same way.
+    """
     findings: list[Finding] = []
     groups = {group.id: group for group in event.groups}
     largest = max((table.capacity for table in event.tables), default=0)
+    seated = {guest.id for guest in event.guests if guest.eligible}
     for rule in rules:
         if not _is_hard(rule, RuleKind.SAME_TABLE) or rule.group_id is None:
             continue
         group = groups.get(rule.group_id)
         if group is None:
             continue
-        # Distinct member ids, ineligible included: bean-022 changes that.
-        size = len(set(group.member_ids))
+        size = len(seated.intersection(group.member_ids))
         if size > largest:
             findings.append(
                 Finding(
