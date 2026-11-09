@@ -54,6 +54,9 @@ class RuleAssessment:
     status: str  # "satisfied" | "violated" | "unevaluable"
     weight: int | None  # present exactly when hardness is soft
     affected_guest_ids: tuple[str, ...]
+    # What is missing when the status is UNEVALUABLE, in words a person can
+    # read off the result; None for satisfied and violated assessments.
+    reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -128,19 +131,34 @@ def assess_rules(
         seated = [
             t for t in (assignments.get(p) for p in participants) if t is not None
         ]
-        if (
-            rule.kind in _TABLE_LEVEL_KINDS
-            and len(participants) >= 2
-            and len(seated) == len(participants)
-        ):
+        reason: str | None = None
+        if rule.kind not in _TABLE_LEVEL_KINDS:
+            # The kind needs seat positions the table-level chart does not
+            # have, whether or not the participants are seated.
+            status = UNEVALUABLE
+            reason = (
+                "seat positions are not configured, so this "
+                f"{rule.kind.value} rule cannot be evaluated from the chart"
+            )
+        elif len(participants) < 2:
+            status = UNEVALUABLE
+            reason = (
+                "the rule resolves to fewer than two eligible participants, "
+                "so it binds no pair this chart could decide"
+            )
+        elif len(seated) != len(participants):
+            status = UNEVALUABLE
+            reason = (
+                "not all of the rule's participants are seated in this "
+                "chart, so the chart cannot be read for the whole rule"
+            )
+        else:
             distinct = len(set(seated))
             if rule.kind is RuleKind.SAME_TABLE:
                 satisfied = distinct == 1
             else:
                 satisfied = distinct == len(participants)
             status = SATISFIED if satisfied else VIOLATED
-        else:
-            status = UNEVALUABLE
         assessments.append(
             RuleAssessment(
                 rule_id=rule.id,
@@ -149,6 +167,7 @@ def assess_rules(
                 status=status,
                 weight=rule.weight,
                 affected_guest_ids=tuple(participants),
+                reason=reason,
             )
         )
     return tuple(assessments)
