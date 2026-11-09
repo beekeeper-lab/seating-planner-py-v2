@@ -65,6 +65,7 @@ from dataclasses import dataclass, replace
 from ortools.sat.python import cp_model
 
 from seating_planner.domain import Event
+from seating_planner.rules import Hardness, Rule, RuleKind
 
 from .model import build_model
 from .report import Recommendation, build_infeasibility_report
@@ -148,7 +149,16 @@ def solve_hard(
     solve missing its baseline or limit, a non-int or negative limit, an
     event-day solve missing its baseline or given a move_limit, an
     unlocked id that is not in the baseline, or a baseline naming an id
-    the event does not have), and SolverTimeout when the solver reports a
+    the event does not have). It also raises ValueError, before any model is
+    built, when a hard rule's kind cannot be read off a table-level chart —
+    a min_distance or adjacent_seat hard rule, because seat positions are
+    not configured: such a rule cannot be evaluated, a hard rule that cannot
+    be evaluated is never treated as satisfied, and the solve refuses rather
+    than continuing with the rule silently dropped. Soft rules of those
+    kinds are refused by no one: an unevaluable soft rule scores zero and
+    is reported unevaluable.
+
+    Raises SolverTimeout when the solver reports a
     status that is neither a settled answer (OPTIMAL/FEASIBLE) nor a
     settled refutation (INFEASIBLE) — the time limit ran out before CP-SAT
     proved either way.
@@ -219,6 +229,25 @@ def solve_hard(
                     f"current_assignments seats a guest at {table_id!r}, "
                     "which is not a table of this event"
                 )
+    for rule in event.rules:
+        # A table-level chart has no seats: anything that reads past
+        # same_table/different_table kinds cannot be evaluated on it.
+        # Hard and unevaluable is refused, not silently dropped — never
+        # treated as satisfied; soft rules of the same kinds score zero
+        # and are reported unevaluable instead.
+        if (
+            isinstance(rule, Rule)
+            and rule.enabled
+            and rule.hardness is Hardness.HARD
+            and rule.kind not in (RuleKind.SAME_TABLE, RuleKind.DIFFERENT_TABLE)
+        ):
+            raise ValueError(
+                f"rule {rule.id!r} is {rule.kind.value!r} and hard, but no "
+                "seat positions are configured, so it cannot be evaluated; "
+                "a hard rule that cannot be evaluated is never treated as "
+                "satisfied, so this solve is refused rather than continuing "
+                "with the rule silently dropped"
+            )
     if not eligible:
         return summarize("feasible", {}, event, cfg, mode=mode)
     if not event.tables:
