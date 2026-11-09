@@ -54,6 +54,7 @@ class RuleAssessment:
     status: str  # "satisfied" | "violated" | "unevaluable"
     weight: int | None  # present exactly when hardness is soft
     affected_guest_ids: tuple[str, ...]
+    reason: str | None = None  # words for why the status is unevaluable
 
 
 @dataclass(frozen=True)
@@ -141,6 +142,12 @@ def assess_rules(
             status = SATISFIED if satisfied else VIOLATED
         else:
             status = UNEVALUABLE
+        reason = (
+            "seat positions are not configured, so this adjacent_seat "
+            "rule cannot be evaluated"
+            if status == UNEVALUABLE and rule.kind is RuleKind.ADJACENT_SEAT
+            else None
+        )
         assessments.append(
             RuleAssessment(
                 rule_id=rule.id,
@@ -149,6 +156,7 @@ def assess_rules(
                 status=status,
                 weight=rule.weight,
                 affected_guest_ids=tuple(participants),
+                reason=reason,
             )
         )
     return tuple(assessments)
