@@ -21,6 +21,7 @@ solve_event dispatches on the mode's value, so a mode string read from a file, a
 A defect found on 2026-09-28 in the code bean-013 shipped. solve_event validates the mode with `mode not in (PLANNING, LOW_DISRUPTION)`, which compares by equality, and then dispatches with `if mode is LOW_DISRUPTION:`, which compares object identity. Python happens to share one object for identical string literals in source, so every test passes; a mode string that arrives any other way (read from JSON, joined, taken from a request) is equal but not identical.
 Measured on the main branch: `json.loads('"low_disruption"')` as the mode raises "current does not apply to the planning mode", and `"".join(["low_", "disruption"])` with no current chart and no movement limit is accepted and runs a planning solve labelled low_disruption, with no movement limit at all.
 Every comparison of a mode, in every mode the solver has when this bean runs, compares by value.
+v2 rebuild note (2026-11-09): the defect above is the ORIGINAL build's. On the v2 rebuild, solve_hard already validates and dispatches the mode by value, and the hidden suite for this bean passes on v2 main (a mode string from json.loads or a join behaves exactly as the literal does, including the refusal without a current chart). So here this bean is REGRESSION-PINNING: add tests/solver/test_mode_values.py with the two tests named in ac1 and ac2, which pass immediately against the existing code, and leave the source alone. Check by reading hard.py that no mode comparison uses `is` / `is not`; if one does, or if either test fails, fix it by comparing by value. Do not invent a source change to match the description above.
 
 ## May write
 
@@ -37,6 +38,7 @@ Every comparison of a mode, in every mode the solver has when this bean runs, co
 
 ## Constraints
 
+- on a tree where the behaviour is already correct, the change is tests only and touches no source file
 - the solve_event signature and the set of accepted modes are unchanged
 
 ## Non-goals
