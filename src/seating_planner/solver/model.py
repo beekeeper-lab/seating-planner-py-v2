@@ -170,27 +170,52 @@ def build_model(
     # solve carries it true, and only a probe solve of the refutation may
     # switch it off, so a proven clash can name the lock it found.
     locks: list[tuple[str, str, Any]] = []
+    explicit_locks: dict[str, tuple[str, Any]] = {}
     for candidate in event.guests:
         if candidate.eligible and candidate.locked_to_table is not None:
+            # ac1: in event-day the caller's unlock is the newer word — the
+            # freed guest carries no lock at all. Every other mode, and an
+            # event-day lock on a guest who is not unlocked, still holds.
+            if event_day and candidate.id in unlocked:
+                continue
             lock_table = candidate.locked_to_table
             assumption = model.new_bool_var(f"lock-{candidate.id}")
             model.add(seat[candidate.id][lock_table] == 1).only_enforce_if(assumption)
             locks.append((candidate.id, lock_table, assumption))
+            explicit_locks[candidate.id] = (lock_table, assumption)
 
     # Implicit pins (FR-067), event_day only: every baseline guest is
     # treated as locked to their current table unless the caller named
     # them in unlocked, and each pin is an entry of the same
     # locks list — so it rides its own assumption literal, can be named
     # in a proven refutation, and surfaces as an "unlock" recommendation
-    # if it ever proves load-bearing. A guest already explicitly locked
-    # carries one lock, not two; a freed seat (a guest absent from the
-    # re-read event) simply has no pin (FR-071), and the planning
-    # objective below is the one that maximises the soft score with
-    # everything existing held — no opportunistic re-plan of a pinned chart.
+    # if it ever proves load-bearing. A baseline guest with a same-table
+    # explicit lock keeps that one pin; a different-table lock contradicts
+    # the chart pin, so the pin carries its own literal paired with the
+    # lock through a `lock + pin <= 1` clause, making the clash
+    # self-contained in the guest's two literals. A freed seat (a guest
+    # absent from the re-read event) simply has no pin (FR-071), and the
+    # planning objective below is the one that maximises the soft score
+    # with everything existing held — no opportunistic re-plan of a pinned chart.
     if event_day:
         pinned = {guest_id for guest_id, _, _ in locks}
         for guest_id, lock in baseline.items():
-            if guest_id in unlocked or guest_id in pinned:
+            if guest_id in unlocked:
+                continue
+            if guest_id in pinned:
+                # ac5: a same-table lock is still one pin. A different-table
+                # lock contradicts the chart pin, so the pin keeps its own
+                # literal and the pair may not both hold — the unconstrained
+                # clause makes the clash self-contained in the guest's two
+                # literals, which is what keeps the deletion-minimising
+                # refutation from naming an unrelated co-sitter's pin too.
+                lock_table, lock_assumption = explicit_locks[guest_id]
+                if lock_table == lock:
+                    continue
+                assumption = model.new_bool_var(f"pin-{guest_id}")
+                model.add(seat[guest_id][lock] == 1).only_enforce_if(assumption)
+                model.add(lock_assumption + assumption <= 1)
+                locks.append((guest_id, lock, assumption))
                 continue
             assumption = model.new_bool_var(f"lock-{guest_id}")
             model.add(seat[guest_id][lock] == 1).only_enforce_if(assumption)
