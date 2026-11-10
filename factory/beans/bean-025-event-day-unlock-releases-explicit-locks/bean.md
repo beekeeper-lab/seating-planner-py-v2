@@ -10,7 +10,7 @@
 | Approved by | Gregg Reed (owner, directly) |
 | Run order | 25 |
 | Depends on | bean-014 |
-| Size budget | 3 tasks · 3 files · 450 diff lines |
+| Size budget | 3 tasks · 3 files · 650 diff lines |
 
 ## Intent
 
