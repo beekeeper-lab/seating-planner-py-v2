@@ -18,6 +18,13 @@ MAX_TABLES: int = 60
 MAX_RULES: int = 5000
 
 
+class EventValidationError(ValueError):
+    """An event fails, as it stands, a check its constructors enforce or a
+    check only a solve reads: the objects are mutable, so nothing
+    re-checked the event between construction and its use.
+    """
+
+
 class RsvpStatus(str, Enum):
     """Exactly four accepted values; anything else raises on construction."""
 
