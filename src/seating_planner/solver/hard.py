@@ -65,7 +65,7 @@ from dataclasses import dataclass, replace
 from ortools.sat.python import cp_model
 
 from seating_planner.domain import Event
-from seating_planner.rules import Hardness, Rule, RuleKind
+from seating_planner.validation import validate_event_for_solve
 
 from .model import build_model
 from .report import Recommendation, build_infeasibility_report
@@ -149,10 +149,14 @@ def solve_hard(
     solve missing its baseline or limit, a non-int or negative limit, an
     event-day solve missing its baseline or given a move_limit, an
     unlocked id that is not in the baseline, or a baseline naming an id
-    the event does not have), and for two rules sharing an id (refused
-    before any solve runs), and for a hard ``adjacent_seat`` rule, which
-    cannot be evaluated because seat positions are not configured — a
-    hard rule that cannot be evaluated is never treated as satisfied, so
+    the event does not have), and EventValidationError for an event that
+    changed after construction and fails a check its constructors enforce
+    or that only a solve re-runs on the event as it stands — the event's
+    limits, duplicate guest/table/rule ids, a guest's or table's fields,
+    a dangling lock, a group or an enabled rule naming a guest or group
+    the event does not have, and an enabled hard ``adjacent_seat`` rule,
+    which cannot be evaluated because seat positions are not configured —
+    a hard rule that cannot be evaluated is never treated as satisfied, so
     the solve is refused instead of running with the rule silently dropped
     — and SolverTimeout when the solver reports a
     status that is neither a settled answer (OPTIMAL/FEASIBLE) nor a
@@ -165,6 +169,7 @@ def solve_hard(
             f"unsupported mode {mode!r}; the implemented modes are "
             f"{PLANNING!r}, {LOW_DISRUPTION!r} and {EVENT_DAY!r}"
         )
+    validate_event_for_solve(event)
     low_disruption = mode == LOW_DISRUPTION
     event_day = mode == EVENT_DAY
     baseline: Mapping[str, str]
@@ -225,30 +230,6 @@ def solve_hard(
                     f"current_assignments seats a guest at {table_id!r}, "
                     "which is not a table of this event"
                 )
-    seen_rule_ids: set[str] = set()
-    for rule in event.rules:
-        if not isinstance(rule, Rule):
-            continue
-        if rule.id in seen_rule_ids:
-            raise ValueError(
-                f"duplicate rule identifier {rule.id!r}; the event's rules "
-                "must have unique ids"
-            )
-        seen_rule_ids.add(rule.id)
-    for rule in event.rules:
-        if (
-            isinstance(rule, Rule)
-            and rule.enabled
-            and rule.hardness is Hardness.HARD
-            and rule.kind is RuleKind.ADJACENT_SEAT
-        ):
-            raise ValueError(
-                f"rule {rule.id!r} is a hard adjacent_seat rule, but seat "
-                "positions are not configured, so it cannot be evaluated; a "
-                "hard rule that cannot be evaluated is never treated as "
-                "satisfied, so the solve is refused instead of running "
-                "with the rule silently dropped"
-            )
     if not eligible:
         return summarize("feasible", {}, event, cfg, mode=mode)
     if not event.tables:
