@@ -45,6 +45,7 @@ def default_wedding_rules() -> list[Rule]:
                 hardness=Hardness.HARD,
                 group_id=category,
                 weight=None,
+                enabled=False,
                 target="dance_floor",
                 min_zones=2,
             )
