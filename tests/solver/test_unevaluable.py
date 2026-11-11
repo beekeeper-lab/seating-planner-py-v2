@@ -13,8 +13,14 @@ from typing import Any
 
 import pytest
 
-from seating_planner.domain import Event, Guest, RsvpStatus, Table
-from seating_planner.rules import Hardness, Rule, RuleKind, default_wedding_rules
+from seating_planner.domain import Event, Group, Guest, RsvpStatus, Table
+from seating_planner.rules import (
+    TEMPLATE_CATEGORIES,
+    Hardness,
+    Rule,
+    RuleKind,
+    default_wedding_rules,
+)
 from seating_planner.solver import (
     SATISFIED,
     UNEVALUABLE,
@@ -36,8 +42,29 @@ def table(tid: str, cap: int) -> Table:
     return Table(tid, f"Table {tid}", cap, "round", (0.0, 0.0))
 
 
-def wedding(guests: list[Guest], tables: list[Table], rules: list[Rule]) -> Event:
-    return Event(id="e1", name="Wedding", guests=guests, tables=tables, rules=rules)
+def wedding(
+    guests: list[Guest],
+    tables: list[Table],
+    rules: list[Rule],
+    groups: list[Group] | None = None,
+) -> Event:
+    return Event(
+        id="e1",
+        name="Wedding",
+        guests=guests,
+        tables=tables,
+        rules=rules,
+        groups=groups if groups is not None else [],
+    )
+
+
+def template_groups(*members: str) -> list[Group]:
+    """One group per template category, so every rule the template binds to
+    a group names a group the event has (a solve refuses one that does not)."""
+    return [
+        Group(id=category, name=category, member_ids=tuple(members))
+        for category in TEMPLATE_CATEGORIES
+    ]
 
 
 def core() -> Event:
@@ -167,6 +194,7 @@ def test_default_wedding_template_still_solves() -> None:
         [guest(f"g{i}") for i in range(1, 5)],
         [table("t1", 2), table("t2", 2)],
         list(default_wedding_rules()),
+        template_groups("g1", "g2"),
     )
     result = solve_hard(event, CONFIG, mode="planning")
     assert result.status == "feasible"
@@ -188,6 +216,7 @@ def test_default_wedding_template_still_solves() -> None:
         [guest("g1"), guest("g2")],
         [table("t1", 1), table("t2", 1)],
         [distance],
+        template_groups("g1", "g2"),
     )
     assert solve_hard(lone, CONFIG, mode="planning").status == "feasible"
     # The ac4 refusal still holds inside the same test.
