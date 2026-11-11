@@ -19,7 +19,9 @@ def test_default_wedding_template() -> None:
     for category, rule in zip(TEMPLATE_CATEGORIES, rules, strict=True):
         assert rule.id == f"template-{category}"
         assert rule.group_id == category
-        assert rule.enabled is True
+        # bean-026: the accessible rule starts disabled; the rest still do.
+        expected_enabled = category != "accessible_seating"
+        assert rule.enabled is expected_enabled
         assert Rule.from_dict(rule.to_dict()) == rule
 
     for category in (
