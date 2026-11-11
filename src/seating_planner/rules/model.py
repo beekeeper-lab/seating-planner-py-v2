@@ -91,14 +91,26 @@ class Rule:
             raise ValueError(f"a hard rule carries no weight, got {self.weight!r}")
 
         if self.kind is RuleKind.MIN_DISTANCE:
-            distance_ok = _is_positive_number(self.distance_m)
-            zones_ok = _is_real_int(self.min_zones) and self.min_zones >= 1
-            if not distance_ok and not zones_ok:
+            if self.distance_m is not None and not _is_positive_number(self.distance_m):
+                raise ValueError(
+                    "a min_distance rule's distance_m must be a number above zero; "
+                    f"got distance_m={self.distance_m!r} (FR-035)"
+                )
+            if self.min_zones is not None and not (
+                _is_real_int(self.min_zones) and self.min_zones >= 1
+            ):
+                raise ValueError(
+                    "a min_distance rule's min_zones must be an integer of at least "
+                    f"one; got min_zones={self.min_zones!r} (FR-035)"
+                )
+            if self.distance_m is None and self.min_zones is None:
                 raise ValueError(
                     "a min_distance rule needs a numeric distance_m above zero or a "
                     f"zone count of at least one; got distance_m={self.distance_m!r} "
                     f"and min_zones={self.min_zones!r} (FR-035)"
                 )
+            if self.distance_m is not None:
+                self.distance_m = float(self.distance_m)
         else:
             if (
                 self.target is not None
