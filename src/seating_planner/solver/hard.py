@@ -290,19 +290,34 @@ def solve_hard(
             event, kept_rule_ids, movement_limit=limit if limit_kept else None
         )
         if kept_locks:
-            # Each lock the minimisation kept appends one unlock
-            # recommendation, in the combined list's order.
-            report = replace(
-                report,
-                recommendations=tuple(
+            # One unlock recommendation per guest the refutation named,
+            # first kept literal's table: a contradicted guest rides two
+            # kept literals and is named once.
+            seen: set[str] = set()
+            unlocks: list[Recommendation] = []
+            for guest_id, lock_table in kept_locks:
+                if guest_id in seen:
+                    continue
+                seen.add(guest_id)
+                unlocks.append(
                     Recommendation(
                         kind="unlock",
                         detail=f"guest {guest_id} is locked to table {lock_table}; unlock them",
                     )
-                    for guest_id, lock_table in kept_locks
                 )
-                + report.recommendations,
-            )
+            if event_day and not kept_rule_ids:
+                # Locks alone ride the conflict. A seat shortage refutes
+                # with every literal off and keeps nothing, so no capacity
+                # remedy is legitimate in this branch, and the report
+                # builder's only remaining offer — its generic add-a-table
+                # fallback — is a remedy that cannot work while the locks
+                # hold.
+                report = replace(report, recommendations=tuple(unlocks))
+            else:
+                report = replace(
+                    report,
+                    recommendations=tuple(unlocks) + report.recommendations,
+                )
         return summarize("infeasible", {}, event, cfg, report, mode=mode)
     if outcome.status == "unsettled":
         raise SolverTimeout(
