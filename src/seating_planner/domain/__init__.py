@@ -74,13 +74,17 @@ class Guest:
 
     def __post_init__(self) -> None:
         self.rsvp_status = RsvpStatus(self.rsvp_status)
+        if type(self.seat_reserved) is not bool:
+            raise ValueError(
+                f"seat_reserved must be a bool, got {self.seat_reserved!r}"
+            )
 
     @property
     def eligible(self) -> bool:
         """Confirmed, or Pending with an explicitly reserved seat."""
         if self.rsvp_status is RsvpStatus.CONFIRMED:
             return True
-        return self.rsvp_status is RsvpStatus.PENDING and self.seat_reserved
+        return self.rsvp_status is RsvpStatus.PENDING and self.seat_reserved is True
 
 
 @dataclass
