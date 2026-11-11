@@ -10,7 +10,7 @@
 | Approved by | Gregg Reed (owner, directly) |
 | Run order | 31 |
 | Depends on | bean-025 |
-| Size budget | 3 tasks · 3 files · 450 diff lines |
+| Size budget | 3 tasks · 3 files · 700 diff lines |
 
 ## Intent
 
@@ -20,6 +20,8 @@ Every infeasible event-day solve reports at least one corrective action. When no
 
 bean-025 run 2 was merged with this bean as its repair, on the owner's decision. Its pre-merge review demonstrated that an infeasible event-day report can now carry no recommendation at all. With no enabled hard rule the generic "review the hard rules" note is withheld (bean-025 ac4, correctly: there is no rule to review), and when no single lock removal restores feasibility and there is no seat shortfall, nothing takes its place. Two measured cases on the merged main: three new guests locked to a table with one free seat (removing any one lock still leaves two for one seat), and a chart that seats three guests at a two-seat table (chart capacity is not checked on input). Before bean-025 both reports carried at least one recommendation, as bean-010 requires.
 Run 1 (bean-031-20261006T210423Z, PR #24) filled the gap with advice chosen by counting seats, and its pre-merge review showed the counting was wrong three ways: a chart that overfills a table with a new guest also locked there was told only to unlock that guest (still infeasible after), a table holding no chart guest was told to add capacity it could not use, and an unlocked chart guest was counted as pinned, so capacity was advised where the unlocks alone were enough (evidence/reviews/bean-031-20261006T210423Z.md). The solver can answer "would this help" exactly, the same way the rule and lock probes already do, so the advice is checked by solving again before it is given rather than predicted by arithmetic.
+Run 1 on the v2 rebuild built ac1 to ac5 and passed every gate, but its fallback advice for several simultaneous lock contradictions was incomplete. When two or more CHART guests are each locked to a table other than the one the chart gives them, and none of them is unlocked, the report named only ONE of them: unlocking that one guest, as advised, left the event infeasible, and the next report named the next guest. ac5 says the opposite: unlocking every guest an unlock recommendation names restores feasibility, in one step.
+Ready-made fixture for ac6's own test: tables t-1 (capacity 2), t-2 (capacity 4) and t-3 (capacity 4), five confirmed guests g-0 to g-4, stored locks g-3 -> t-3 and g-4 -> t-3, the event-day baseline chart {g-0: t-1, g-1: t-1, g-2: t-1, g-3: t-2, g-4: t-2} and unlocked = {g-2}. The solve is infeasible: g-3 and g-4 are each pinned to t-2 by the chart and to t-3 by their lock. A correct report recommends unlocking BOTH g-3 and g-4 (in one recommendation or in two), recommends no capacity (unlocking alone suffices), and names no hard rule (the event has none). Re-running the same event with those two guests' locks removed is feasible.
 
 ## May write
 
@@ -34,6 +36,7 @@ Run 1 (bean-031-20261006T210423Z, PR #24) filled the gap with advice chosen by c
 | ac2 | When stored locks pin more guests to a table than it can hold beside its chart guests, and no single unlock is enough, the report recommends unlocking and names each locked guest at that table, and does not recommend reviewing hard rules when the event has none. | `test` `tests/solver/test_event_day_advice.py::test_locks_that_overfill_a_table_are_named` |
 | ac3 | When the chart itself seats more guests at a table than its capacity, the report recommends capacity for that table, and does not recommend reviewing hard rules when the event has none. | `test` `tests/solver/test_event_day_advice.py::test_a_chart_that_overfills_a_table_asks_for_capacity` |
 | ac5 | Advice added because no single rule or lock removal helps is checked by a probe solve before it is given. Unlocking every guest an unlock recommendation names restores feasibility; adding seats at every table a capacity recommendation names restores feasibility; and capacity is not recommended when the recommended unlocks alone restore it. Unlock recommendations name the guest id, capacity recommendations the table id. | `test` `tests/solver/test_event_day_advice.py::test_fallback_advice_is_probed` |
+| ac6 | When two or more chart guests are each locked to a table other than their chart table and none is unlocked, the report's unlock advice names every such guest, so unlocking all of them restores feasibility in one step, and recommends no capacity. | `test` `tests/solver/test_event_day_advice.py::test_every_contradicted_guest_is_named_at_once` |
 | ac4 | Every existing solver test still passes unchanged. | `command` `pytest -q tests/solver` |
 
 ## Constraints
