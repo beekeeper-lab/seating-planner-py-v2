@@ -123,6 +123,126 @@ class SolverTimeout(RuntimeError):
     """
 
 
+def _probe_restores_feasibility(
+    event: Event,
+    cfg: SolverConfig,
+    baseline: Mapping[str, str],
+    unlocked: frozenset[str],
+) -> bool:
+    """One probe re-solve under the identical event-day parameters: True
+    only when it settles feasible. A SolverTimeout is swallowed — a probe
+    that does not settle proves nothing, the discipline this module's
+    assumption-literal probe walk states — and an infeasible probe proves
+    its remedy is not one."""
+    try:
+        result = solve_hard(
+            event,
+            cfg,
+            mode=EVENT_DAY,
+            current_assignments=baseline,
+            unlocked_guest_ids=unlocked,
+        )
+    except SolverTimeout:
+        return False
+    return result.status == "feasible"
+
+
+def _event_day_probed_advice(
+    event: Event,
+    baseline: Mapping[str, str],
+    unlocked: frozenset[str],
+    cfg: SolverConfig,
+) -> tuple[Recommendation, ...] | None:
+    """Event-day remedies a probe re-solve proved restore feasibility, or
+    ``None`` when no probe proved anything and the earlier report stands.
+
+    The walk is fixed: (1) each table's fixed occupants are counted from
+    the stored state alone — the baseline guests pinned there plus the
+    eligible stored-locked guests whose lock names it, the caller's
+    unlocked names excluded, so a chart guest locked to a different table
+    counts at both; (2) the unlock candidates are, in the event's guest
+    order, the contradicted chart guests — charted at one table, locked
+    to another, neither pin released — plus every stored-locked guest
+    aimed at a table whose fixed occupants pass its capacity, deduplicated
+    by guest (each guest is visited once); (3) when that set is non-empty
+    a probe copy carrying exactly those guests' locks set to ``None`` is
+    re-solved, and on settled feasibility one unlock recommendation per
+    candidate is returned, each naming the guest and its lock's table —
+    no capacity is co-offered, because the unlocks alone suffice; (4)
+    otherwise, when any table's fixed occupants pass its capacity, a
+    probe copy raising each such table (event table order) to exactly its
+    fixed-occupant count is re-solved, and on settled feasibility one
+    add_capacity per such table is returned, each naming the table, the
+    occupant count and the seat count; (5) otherwise ``None``."""
+    fixed_occupants: dict[str, set[str]] = {table.id: set() for table in event.tables}
+    for guest_id, table_id in baseline.items():
+        if guest_id not in unlocked:
+            fixed_occupants[table_id].add(guest_id)
+    for guest in event.guests:
+        if guest.eligible and guest.locked_to_table and guest.id not in unlocked:
+            fixed_occupants[guest.locked_to_table].add(guest.id)
+    overfilled = [
+        table
+        for table in event.tables
+        if len(fixed_occupants[table.id]) > table.capacity
+    ]
+    overfilled_ids = frozenset(table.id for table in overfilled)
+    candidates: list[tuple[str, str]] = []
+    for guest in event.guests:
+        if not guest.eligible or guest.id in unlocked or guest.locked_to_table is None:
+            continue
+        charted = baseline.get(guest.id)
+        if (
+            charted is not None and charted != guest.locked_to_table
+        ) or guest.locked_to_table in overfilled_ids:
+            candidates.append((guest.id, guest.locked_to_table))
+    if candidates:
+        candidate_ids = frozenset(guest_id for guest_id, _ in candidates)
+        probe_event = replace(
+            event,
+            guests=[
+                replace(guest, locked_to_table=None)
+                if guest.id in candidate_ids
+                else guest
+                for guest in event.guests
+            ],
+        )
+        if _probe_restores_feasibility(probe_event, cfg, baseline, unlocked):
+            return tuple(
+                Recommendation(
+                    kind="unlock",
+                    detail=(
+                        f"guest {guest_id} is locked to table {lock_table}; unlock them"
+                    ),
+                )
+                for guest_id, lock_table in candidates
+            )
+    if overfilled:
+        probe_event = replace(
+            event,
+            tables=[
+                replace(table, capacity=len(fixed_occupants[table.id]))
+                if table.id in overfilled_ids
+                else table
+                for table in event.tables
+            ],
+        )
+        if _probe_restores_feasibility(probe_event, cfg, baseline, unlocked):
+            return tuple(
+                Recommendation(
+                    kind="add_capacity",
+                    detail=(
+                        f"table {table.id} holds "
+                        f"{len(fixed_occupants[table.id])} stored guests "
+                        f"against its {table.capacity} seats; raise its "
+                        f"capacity to {len(fixed_occupants[table.id])}"
+                    ),
+                )
+                for table in overfilled
+            )
+    return None
+
+
 def solve_hard(
     event: Event,
     config: SolverConfig | None = None,
@@ -310,6 +430,14 @@ def solve_hard(
                     report,
                     recommendations=tuple(unlocks) + report.recommendations,
                 )
+        # A refutation with no named rule is offered remedies that a probe
+        # re-solve proved restore feasibility; when no probe settles
+        # feasible the report as built stands, so a report is never
+        # emptied and the rule-named path is left exactly as built.
+        if event_day and not kept_rule_ids:
+            proven = _event_day_probed_advice(event, baseline, unlocked, cfg)
+            if proven is not None:
+                report = replace(report, recommendations=proven)
         return summarize("infeasible", {}, event, cfg, report, mode=mode)
     if outcome.status == "unsettled":
         raise SolverTimeout(
