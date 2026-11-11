@@ -101,6 +101,17 @@ class Group:
         self.member_ids.append(guest_id)
 
 
+def _rule_id(rule: object) -> str | None:
+    """The id a rule entry carries, or None when it carries none.
+
+    The domain deliberately knows nothing of the rules package: an
+    entry of Event.rules is a plain object, and is checked exactly
+    when it carries a string ``id``.
+    """
+    rule_id = getattr(rule, "id", None)
+    return rule_id if isinstance(rule_id, str) else None
+
+
 def _validate_event_contents(
     guests: Sequence[Guest],
     tables: Sequence[Table],
@@ -123,6 +134,14 @@ def _validate_event_contents(
         if table.id in seen_table_ids:
             raise ValueError(f"duplicate table identifier {table.id!r}")
         seen_table_ids.add(table.id)
+    seen_rule_ids = set[str]()
+    for rule in rules:
+        rule_id = _rule_id(rule)
+        if rule_id is None:
+            continue
+        if rule_id in seen_rule_ids:
+            raise ValueError(f"duplicate rule identifier {rule_id!r}")
+        seen_rule_ids.add(rule_id)
     for guest in guests:
         if (
             guest.locked_to_table is not None
@@ -206,4 +225,9 @@ class Event:
     def add_rule(self, rule: Any) -> None:
         if len(self.rules) >= MAX_RULES:
             raise ValueError(f"an event holds at most {MAX_RULES} rules")
+        rule_id = _rule_id(rule)
+        if rule_id is not None and any(
+            _rule_id(existing) == rule_id for existing in self.rules
+        ):
+            raise ValueError(f"duplicate rule identifier {rule_id!r}")
         self.rules.append(rule)
