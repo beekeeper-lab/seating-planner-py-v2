@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING
 
 from ..domain import Event, Group, Guest, RsvpStatus, Table
 from ..rules import Rule
+from ..validation import validate_event_for_save
 
 if TYPE_CHECKING:
     # Type-only: ``accept`` checks the solver-stamped status on the way in,
@@ -260,8 +261,11 @@ class EventRepository:
         ``event.rules`` is ``list[Any]`` in the domain and allows opaque
         items, but only structured :class:`~seating_planner.rules.Rule`
         instances are persistable: any other item raises ``TypeError``
-        before the database is touched.
+        before the database is touched. The event is first re-validated as
+        it stands — whatever a save accepts, a load can load — and a breach
+        raises ``EventValidationError`` before the database is touched.
         """
+        validate_event_for_save(event)
         for rule in event.rules:
             if not isinstance(rule, Rule):
                 raise TypeError(
