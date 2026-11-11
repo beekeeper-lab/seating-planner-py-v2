@@ -149,7 +149,8 @@ def solve_hard(
     solve missing its baseline or limit, a non-int or negative limit, an
     event-day solve missing its baseline or given a move_limit, an
     unlocked id that is not in the baseline, or a baseline naming an id
-    the event does not have), and for a hard ``adjacent_seat`` rule, which
+    the event does not have), and for two rules sharing an id (refused
+    before any solve runs), and for a hard ``adjacent_seat`` rule, which
     cannot be evaluated because seat positions are not configured — a
     hard rule that cannot be evaluated is never treated as satisfied, so
     the solve is refused instead of running with the rule silently dropped
@@ -224,6 +225,16 @@ def solve_hard(
                     f"current_assignments seats a guest at {table_id!r}, "
                     "which is not a table of this event"
                 )
+    seen_rule_ids: set[str] = set()
+    for rule in event.rules:
+        if not isinstance(rule, Rule):
+            continue
+        if rule.id in seen_rule_ids:
+            raise ValueError(
+                f"duplicate rule identifier {rule.id!r}; the event's rules "
+                "must have unique ids"
+            )
+        seen_rule_ids.add(rule.id)
     for rule in event.rules:
         if (
             isinstance(rule, Rule)
